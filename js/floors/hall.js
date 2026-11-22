@@ -28,6 +28,7 @@ function heightAt(x, z) {
 
 // story helpers: carry a folding chair (hold E), set it down on an empty front-row place
 let carried = null, carriedSlot = -1, carriedS = null;
+let screenOff = null; // material for the smashed town-hall screen (made in build)
 function pickChair(game, i) {
   const rec = game.rec('setChair' + i);
   if (!rec || rec.removed || rec.held) return;
@@ -120,6 +121,13 @@ export default {
     // curtains (fixtures, breakable) + the town-hall screen on its trusses
     for (const sx of [-1, 1]) ctx.prop('curtain', sx * 4.6, -hd, 0, { w: 2.8, h: 4.0, y: ST.h, noCast: true });
     ctx.prop('hallScreen', 0, -8.4, 0, { tag: 'hallScreen', hp: 8, noCast: true });
+    screenOff = M.std('hallScreenOff', { roughness: 0.3, emissive: '#ffffff', emissiveIntensity: 0.22, map: ctx.canvasTex('hallScreenOff', 512, 290, (x, w, h) => {
+      x.fillStyle = '#10131c'; x.fillRect(0, 0, w, h);
+      for (let i = 0; i < 26; i++) { x.fillStyle = ['#ff3b6b', '#3bff8a', '#3b8aff', '#ffffff'][i % 4]; x.globalAlpha = 0.35; x.fillRect(0, (i * 37) % h, w, 3); }
+      x.globalAlpha = 1; x.strokeStyle = 'rgba(230,236,255,0.85)'; x.lineWidth = 2;
+      const cx = 300, cy = 120; for (let i = 0; i < 11; i++) { const a = i * 0.57 + 0.2; let px = cx, py = cy; x.beginPath(); x.moveTo(px, py); for (let k = 0; k < 4; k++) { px += Math.cos(a + (k % 2 ? 0.3 : -0.25)) * 60; py += Math.sin(a + (k % 2 ? 0.3 : -0.25)) * 60; x.lineTo(px, py); } x.stroke(); }
+      x.fillStyle = '#c9d2e6'; x.font = 'bold 40px ' + ctx.KFONT; x.textAlign = 'center'; x.fillText('신호 없음', w / 2, h - 46);
+    }) });
     // podium (flip it!), MC's mic stand, megaphone, spotlights on the stage
     ctx.prop('podium', -2.0, -6.25, 0, { y: ST.h, tag: 'podium' });
     ctx.prop('micStand', -3.7, -6.15, 0.2, { y: ST.h });
@@ -129,8 +137,8 @@ export default {
     // floor: spotlights aimed at the stage, speakers on tripods either side
     ctx.prop('spotlight', -8.2, -3.4, Math.atan2(8.2, -3.9));
     ctx.prop('spotlight', 8.2, -3.4, Math.atan2(-8.2, -3.9));
-    ctx.prop('speaker', -6.9, -6.5, 0.3, { tag: 'spkL' });
-    ctx.prop('speaker', 6.9, -6.5, -0.3, { tag: 'spkR' });
+    ctx.prop('speaker', -6.9, -6.5, 0.3, { tag: 'spkL', hp: 4 });
+    ctx.prop('speaker', 6.9, -6.5, -0.3, { tag: 'spkR', hp: 4 });
     // the banner across the top of the stage (hung from the ceiling on two wires)
     ctx.prop('banner', 0, -5.45, 0, { text: '창립 30주년 기념 전사 타운홀', w: 7.2, h: 0.62, y: 3.15 });
     const wire = M.std('hallWire', { color: '#c9ced4', roughness: 0.4, metalness: 0.6 });
@@ -161,7 +169,7 @@ export default {
     for (const [x, z, y, r] of [[-8.9, 8.45, 0, 0.1], [-8.35, 8.5, 0, -0.15], [-8.65, 8.45, 0.3, 0.35], [-9.6, 8.4, 0, 0.2]]) ctx.prop('box', x, z, r, { y });
 
     // ---------------- wreaths by the elevators (each text is its own draw — four is the budget)
-    [[-4.3, '축 창립 30주년', '대표이사'], [-3.3, '축 발전', '거래처 일동'], [3.3, '축 타운홀', '노동조합'], [4.3, '축 대박', '인사팀 일동']]
+    [[-4.8, '축 창립 30주년', '대표이사'], [-3.8, '축 발전', '거래처 일동'], [3.8, '축 타운홀', '노동조합'], [4.8, '축 대박', '인사팀 일동']]
       .forEach(([x, text, from]) => ctx.prop('wreath', x, 8.35, PI, { text, from }));
 
     // ---------------- balloon bunches (fixed = anchored to a little weight; one hit pops them)
@@ -172,7 +180,7 @@ export default {
     };
     bunch(-4.9, -5.25, 0); bunch(3.9, -5.25, 1); bunch(-7.9, -5.0, 2); bunch(7.9, -5.0, 0);
     bunch(-10.4, -3.0, 1); bunch(10.2, -3.0, 2); bunch(-10.4, 3.2, 0); bunch(10.2, 3.2, 1);
-    bunch(-5.6, 8.3, 2); bunch(5.6, 8.3, 0);
+    bunch(-5.9, 8.2, 2); bunch(5.7, 8.2, 0);
 
     // ---------------- refreshment table at the back (east)
     ctx.prop('meetingTable', 7.8, 7.9, 0);
@@ -242,20 +250,20 @@ export default {
       { hold: { tag: 'setChair0', at: 'stackPick', text: '의자 들기', sec: 0.5 } },
       { call: (g) => pickChair(g, 0) },
       { hold: { at: 'slot0', text: '의자 펴기', sec: 0.7 } },
-      { call: (g) => placeChair(g), sfx: 'snap' },
+      { call: (g) => placeChair(g), sfx: 'hitMetal' },
       { hold: { tag: 'setChair1', at: 'stackPick', text: '의자 들기', sec: 0.5 } },
       { call: (g) => pickChair(g, 1) },
       { hold: { at: 'slot1', text: '의자 펴기', sec: 0.7 } },
-      { call: (g) => placeChair(g), sfx: 'snap' },
+      { call: (g) => placeChair(g), sfx: 'hitMetal' },
       { hold: { tag: 'setChair2', at: 'stackPick', text: '의자 들기', sec: 0.5 } },
       { call: (g) => pickChair(g, 2) },
       { hold: { at: 'slot2', text: '의자 펴기', sec: 0.7 } },
-      { call: (g) => placeChair(g), sfx: 'snap', done: 1, stress: 1 },
+      { call: (g) => placeChair(g), sfx: 'hitMetal', done: 1, stress: 1 },
       { sub: ['나', '(…의자는 왜 항상 내가 까는 걸까)', 2000] },
-      { say: ['mc', '자, 지금부터 창립 기념 타운홀을 시작하겠습니다! 박수~', 2.8], sfx: 'clap' },
+      { say: ['mc', '자, 지금부터 창립 기념 타운홀을 시작하겠습니다! 박수~', 2.8], sfx: 'fanfare' },
       { walk: { to: 'listenSpot', r: 0.9 } },
       { npc: { who: 'mc', walk: 'mcAside', speed: 1.2, anim: 'walk' } },
-      { npc: { who: 'ceo', walk: 'podiumBack', speed: 0.9, anim: 'walk', arrive: 'talk' } },
+      { npc: { who: 'ceo', walk: 'podiumBack', speed: 1.25, anim: 'walk', arrive: 'talk' } },
       { wait: 4.2 },
       { mission: { title: '타운홀 의자 깔기', sub: '3층 · 오후 2:10', quote: '사장님 말씀이 있겠습니다' }, sub: ['사장님', '에… 우리 회사가 말이야, 30년 전 단칸방에서 시작했어.', 3000], sfx: 'mumbleLow' },
       { wait: 3.2 },
@@ -298,6 +306,8 @@ export default {
       }
     },
     onDestroy(game, rec) {
+      // the smashed screen loses its slide: static + cracks
+      if (rec.tag === 'hallScreen' && screenOff) rec.group.traverse((m) => { if (m.isMesh && m.material && m.material.map) m.material = screenOff; }); // (the slide is the only textured part)
       const mc = game.npc('mc');
       if (!mc || mc.gone) return;
       if (rec.tag === 'hallScreen') game.say(mc, '화… 화면이!! 발표 자료가!!', 2.6);

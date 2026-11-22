@@ -32,7 +32,7 @@ export default {
 
     // ---------------- materials
     const po = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 };
-    const parquet = M.tex('execParquet', tex2.darkWood(), W / 0.75, D / 0.75, { roughness: 0.42, metalness: 0.02 });
+    const parquet = M.tex('execParquet', tex2.darkWood(), W / 0.75, D / 0.75, { roughness: 0.6, metalness: 0.0, color: '#e8dccf' });
     const carpetR = M.tex('execCarpetR', tex.carpet('#6e2632'), 8, 9, Object.assign({ roughness: 0.97 }, po));
     const carpetG = M.tex('execCarpetG', tex.carpet('#27493c'), 8, 8.5, Object.assign({ roughness: 0.97 }, po));
     const carpetL = M.tex('execCarpetL', tex.carpet('#6e2632'), 8, 9, Object.assign({ roughness: 0.97 }, po));
@@ -69,13 +69,14 @@ export default {
 
     // ---------------- north window wall: wood sill, bronze mullions, breakable panes, skyline
     const bays = 12, bw = W / bays;
-    ctx.box(W + 0.4, 0.78, 0.22, panel, 0, 0, -hd - 0.11, { collide: true });
-    skin(ctx, pLow, 'x', -hd, -hw, hw, 0, 0.78, 0, 0.78);
-    ctx.box(W + 0.4, 0.05, 0.3, brass, 0, 0.78, -hd - 0.05);
+    const SILL = 0.42; // low executive sill: tall panoramic glass (and small things thrown from hand height clear it)
+    ctx.box(W + 0.4, SILL, 0.22, panel, 0, 0, -hd - 0.11, { collide: true });
+    skin(ctx, pLow, 'x', -hd, -hw, hw, 0, SILL, 0, 0.7);
+    ctx.box(W + 0.4, 0.05, 0.3, brass, 0, SILL, -hd - 0.05);
     ctx.box(W + 0.4, 0.45, 0.22, cream, 0, H - 0.45, -hd - 0.11);
-    for (let i = 0; i <= bays; i++) ctx.box(0.1, H - 0.45 - 0.83, 0.12, bronze, -hw + i * bw, 0.83, -hd - 0.02);
+    for (let i = 0; i <= bays; i++) ctx.box(0.1, H - 0.45 - SILL - 0.05, 0.12, bronze, -hw + i * bw, SILL + 0.05, -hd - 0.02);
     ctx.box(W, 0.06, 0.1, bronze, 0, H - 0.5, -hd - 0.02);
-    ctx.window({ axis: 'z', at: -hd - 0.06, side: -1, from: -hw, to: hw, bays, y0: 0.83, y1: H - 0.5, label: '12층 창밖으로!' });
+    ctx.window({ axis: 'z', at: -hd - 0.06, side: -1, from: -hw, to: hw, bays, y0: SILL + 0.05, y1: H - 0.5, label: '12층 창밖으로!' });
     ctx.sky('day', { radius: 40, y0: -16, h: 46, center: PI, span: 2.7 });
 
     // ---------------- 사장실 partitions (dark wood both sides, double door to the lounge)
@@ -133,7 +134,7 @@ export default {
     // visitor chairs
     for (const z of [-4.15, -2.85]) ctx.prop('boardChair', -7.75, z, -PI / 2 + (z < -3.5 ? 0.15 : -0.15));
     // the founder's portrait behind the desk (falls when hit; pick it up and throw it out of a window)
-    ctx.prop('ceoPortrait', -hw, -3.5, PI / 2, { y: 1.45, tag: 'portrait', hp: 8 });
+    ctx.prop('ceoPortrait', -hw + 0.04, -3.5, PI / 2, { y: 1.45, tag: 'portrait', hp: 8 });
     for (const z of [-4.75, -2.25]) ctx.prop('wallLamp', -hw, z, PI / 2, { y: 1.75 });
     ctx.prop('bookcase', -hw + 0.22, -6.35, PI / 2, { noCast: true });
     ctx.prop('bookcase', -hw + 0.22, -0.65, PI / 2, { noCast: true });
@@ -142,8 +143,9 @@ export default {
     ctx.prop('curtain', -11.5, -hd, 0, { w: 0.9, h: 2.95, y: 0.05 });
     ctx.prop('curtain', -4.5, -hd, 0, { w: 0.9, h: 2.95, y: 0.05 });
     // the chairman's celadon jar on its marble pedestal
-    ctx.prop('pedestal', -5.0, -7.05, 0, { tag: 'pedestal' });
-    ctx.prop('vase', -5.0, -7.05, 0.4, { pedestal: false, y: 0.885, tag: 'vase' });
+    ctx.prop('pedestal', -5.0, -1.15, 0, { tag: 'pedestal' });
+    ctx.prop('vase', -5.0, -1.15, 0.4, { pedestal: false, y: 0.885, tag: 'vase' });
+    ctx.prop('plantBig', -4.6, -7.4);
     // south wall: liquor cabinet, trophy sideboard, the safe
     ctx.prop('liquorCabinet', -10.75, CEO_Z - 0.24, PI, { noCast: true });
     ctx.box(1.9, 0.8, 0.46, panel, -8.55, 0, CEO_Z - 0.24, { collide: true });
@@ -199,14 +201,13 @@ export default {
     // ================= 비서실 · 엘리베이터 홀
     evX.forEach((x, i) => ctx.elevator(x, hd, PI, '12F', i));
     ctx.decorProp('floorSign', 0, 1.6, hd - 0.015, PI, { text: '12', h: 0.5, underline: false, color: '#9b7a32' });
-    const sec = ctx.desk(-6.3, 3.0, PI, { occupied: true });
+    const sec = ctx.desk(-6.3, 3.7, PI, { occupied: true });
     ctx.npc('workerF2', sec.x, sec.z, {
       name: 'secretary', role: 'secretary', rotY: sec.rotY, anim: 'type', face: 'normal', seat: sec, variantSeed: 123,
       look: { suit: '#6b2a36', shirt: '#f6efe4', pants: '#2d2a33', glasses: false, lanyard: false },
       lines: ['사장님 계시니 조용히 다니세요.', '사장님, 1시 골프 약속 잡혀 있습니다.', '결재 서류는 여기 두고 가세요.'],
     });
-    ctx.prop('plantBig', -7.75, 1.75);
-    ctx.prop('plantBig', -4.6, 1.75);
+    ctx.prop('plantBig', -8.0, 1.65);
     ctx.prop('cabinet', -9.0, CEO_Z + 0.48, 0);
     ctx.prop('cabinet', -9.5, CEO_Z + 0.48, 0);
     ctx.prop('binders', -9.25, CEO_Z + 0.48, 0, { y: 0.72, n: 5, seed: 12 });
@@ -230,15 +231,14 @@ export default {
     ctx.decorProp('frame', 4.6, 1.55, hd - 0.015, PI, {}, { cast: false });
     ctx.prop('alarmBell', -3.3, hd, PI, { y: 1.25 });
     ctx.prop('extinguisher', 3.0, hd - 0.22, PI);
-    ctx.prop('plantBig', -2.7, 7.55);
-    ctx.prop('plantBig', 2.6, 7.55);
 
     // ---------------- anchors
     ctx.spawn(0.4, -3.1, -PI / 2 - 0.12);
     ctx.anchor('waitSpot', 6.1, 1.45);       // outside the boardroom glass door
     ctx.anchor('presentSpot', 11.0, -1.55);  // next to the screen
-    ctx.anchor('ceoBoard', 4.85, -3.8);      // the CEO presides from the far end
+    ctx.anchor('ceoBoard', 11.0, -5.75);     // the CEO watches from beside the screen
     ctx.anchor('ceoHome', -10.05, -2.35);
+    ctx.anchor('behindDesk', -10.9, -4.75);
     ctx.hide(-10.9, -4.75);   // behind his own desk
     ctx.hide(11.3, -0.35);
     ctx.hide(-11.2, 2.0);
@@ -275,22 +275,24 @@ export default {
       { wait: 3.0 },
       { npc: { who: 'exec2', anim: 'talk', say: '이번 주말에 한 번 더 나가시죠~' } },
       { wait: 3.0 },
+      { say: ['ceo', '밖에 그 친구 아직 있나? …조금 더 있다 부르지.', 2.8] },
+      { wait: 3.2 },
       { stress: 3, face: ['endure', 1.6], sub: ['나', '(…20분째 서 있다)', 2200] },
-      { wait: 2.6 },
+      { wait: 2.8 },
       { say: ['ceo', '거기 밖에 자네. 들어와.', 2.4], done: 1 },
       { wait: 1.2 },
       { walk: { to: 'presentSpot', r: 0.8 } },
       { hold: { tag: 'boardTv', at: 'presentSpot', text: '보고 시작하기', sec: 1.0 }, sfx: 'beep' },
-      { sub: ['나', '3분기 실적 보고 드리겠습니다. 첫 장은…', 2400] },
-      { wait: 2.4 },
-      { say: ['ceo', '잠깐. 폰트가 마음에 안 드네.', 2.8], sfx: 'mumbleLow' },
-      { wait: 3.0 },
-      { say: ['exec1', '글씨가 좀 가볍죠? 사장님 말씀이 맞습니다.', 2.8] },
-      { wait: 3.0 },
-      { say: ['ceo', '처음부터 다시 해 와. 오늘 안으로.', 3.0], stress: 10, face: ['endure', 2.6], done: 2 },
+      { sub: ['나', '3분기 실적 보고 드리겠습니다. 첫 장은…', 2400], npc: { who: 'ceo', look: 'player', anim: 'armsCrossed' } },
       { wait: 2.6 },
+      { say: ['ceo', '잠깐.', 1.6], sub: ['사장님', '잠깐. …폰트가 마음에 안 드네.', 2800], sfx: 'mumbleLow' },
+      { wait: 3.0 },
+      { npc: { who: 'exec1', anim: 'talk', say: '글씨가 좀 가볍죠? 사장님 말씀이 맞습니다.' } },
+      { wait: 3.0 },
+      { npc: { who: 'ceo', anim: 'talk', look: 'player' }, sub: ['사장님', '처음부터 다시 해 와. 오늘 안으로.', 3000], stress: 10, face: ['endure', 2.6], done: 2 },
+      { wait: 3.0 },
       { sub: ['나', '(…첫 장도 못 넘겼는데)', 2400] },
-      { wait: 2.8 },
+      { wait: 3.0 },
     ],
   },
 
@@ -300,15 +302,54 @@ export default {
       for (const n of game.npcs('exec')) if (n.seated) { n.sitY = 0.11; n.place(); }
     },
     onTick(game, dt) {
+      // anything knocked off the west / east / south walls that ends up inside a wall comes back into the room
+      const S = game.S;
+      // the player never leaves through a broken pane (panes only stop bodies, and you can jump the sill)
+      if (game.P.pos.z < -D / 2 + 0.25) game.P.pos.z = -D / 2 + 0.25;
+      // …and a small thing kicked hard enough to tunnel through the 사장실 partitions is put back on its side
+      if (S) for (const r of S.phys.records) {
+        if (r.removed || r.out || r.fixed) continue;
+        const p = r.body.position;
+        if (r.held || r.riding) { r._exLast = null; continue; }
+        if (p.x < -W / 2 + 0.05 || p.x > W / 2 - 0.05 || p.z > D / 2 - 0.05) {
+          p.x = Math.max(-W / 2 + 0.45, Math.min(W / 2 - 0.45, p.x)); p.z = Math.min(D / 2 - 0.45, p.z); p.y = Math.max(p.y, 0.4);
+          r.body.velocity.set(0, 0, 0); r.body.wakeUp();
+        }
+        const last = r._exLast || (r._exLast = [p.x, p.z]);
+        if (p.y < H) {
+          const midX = CEO_X + 0.1, midZ = CEO_Z + 0.1;
+          const crossX = (last[0] - midX) * (p.x - midX) < 0 && Math.min(last[1], p.z) < CEO_Z + 0.2 && !(p.z > CEO_DOOR[0] && p.z < CEO_DOOR[1]);
+          const crossZ = (last[1] - midZ) * (p.z - midZ) < 0 && Math.min(last[0], p.x) < CEO_X + 0.2;
+          if (crossX || crossZ) {
+            if (crossX) p.x = last[0] < midX ? CEO_X - 0.3 : CEO_X + 0.5;
+            if (crossZ) p.z = last[1] < midZ ? CEO_Z - 0.3 : CEO_Z + 0.5;
+            r.body.velocity.set(0, 0, 0);
+          }
+        }
+        last[0] = p.x; last[1] = p.z;
+      }
       if (!game.rampage) return;
       const ceo = game.npc('ceo');
       if (ceo && !ceo.gone) {
-        if (ceo.state === 'flee' && !ceo._execSaid) { ceo._execSaid = true; game.say(ceo, '내 책상 뒤로…! 비켜!', 2.2); }
+        if (ceo.state === 'flee' && !ceo._execSaid) {
+          ceo._execSaid = true;
+          // trouble outside his office → he dives behind his own desk
+          if (game.P.pos.x > CEO_X + 0.5 && ceo.pos.x < CEO_X) {
+            const spot = game.anchor('behindDesk');
+            game.walkNpc(ceo, spot, { speed: 3.4, anim: 'flee', arrive: 'scared', onArrive: (n) => { n.state = 'cower'; n.t = 0; } });
+            ceo.state = 'flee';
+          }
+          game.say(ceo, '내 책상 뒤로…! 비켜!', 2.2);
+        }
         if (ceo.state === 'cower' && (!ceo.bubble || ceo.bubble.until < game.time) && Math.random() < dt * 0.45) game.say(ceo, CEO_LINES[(Math.random() * CEO_LINES.length) | 0], 2.6);
       }
-      // the portrait leaving the building gets its own reaction
-      const p = game.S && game.S.phys.records.find((r) => r.tag === 'portrait');
-      if (p && p.out && !p._execSaid) { p._execSaid = true; if (ceo && !ceo.gone) game.say(ceo, '아버님 초상화가!! 12층에서!!', 2.8); }
+      // the portrait leaving the building gets its own reaction; a jar that falls 12 floors is a broken jar
+      if (S) for (const r of S.phys.records) {
+        if (!r.out || r._execSaid || (r.tag !== 'portrait' && r.tag !== 'vase')) continue;
+        r._execSaid = true;
+        if (r.tag === 'vase') game.emit('break', r);
+        if (ceo && !ceo.gone) game.say(ceo, r.tag === 'vase' ? '회장님 도자기가 창밖으로!!' : '아버님 초상화가!! 12층에서!!', 2.8);
+      }
     },
     onDestroy(game, rec) {
       const ceo = game.npc('ceo');

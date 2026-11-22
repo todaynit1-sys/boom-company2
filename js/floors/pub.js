@@ -65,7 +65,7 @@ export default {
     ctx.animate((dt, t) => { if (!ball.userData.off) ball.color.setHSL((t * 0.07) % 1, 0.8, 0.62); });
     // sprinklers + fire bell (shared toy)
     for (const x of [-9, -3, 3, 9]) for (const z of [-3.2, 3.2]) ctx.prop('sprinkler', x, z);
-    ctx.prop('alarmBell', -hw, -4.6, PI / 2, { y: 1.25 });
+    ctx.prop('alarmBell', 1.6, -hd, 0, { y: 1.25 });
 
     // ---------------- grill tables (hold-E flips them), stools, smoke hoods, bottles
     const stool = (x, z, col, k) => ctx.prop('stool', x, z, k * 0.7, col === RED ? {} : { color: col });
@@ -90,7 +90,7 @@ export default {
     });
     ctx.prop('neonSign', -7.2, -hd, 0, { text: '회식', color: '#ff4fa0', y: 1.62, h: 0.72 });
     ctx.prop('banner', -5.2, hd, PI, { y: 2.12, text: '오늘은 부장님이 쏜다!', w: 3.4, h: 0.5 });
-    ctx.prop('apronRack', -12.3, 6.9, PI / 2);
+    ctx.prop('apronRack', -12.3, 7.7, PI / 2);
 
     // ---------------- counter (owner), soju fridge, back bar, menu board
     ctx.prop('cafeCounter', 8.6, 6.3, PI, { w: 3.4, noCast: true, name: '고깃집 카운터' });
@@ -118,11 +118,15 @@ export default {
     ctx.prop('neonSign', hw, -5.0, -PI / 2, { text: '노래방', color: '#3fe0ff', y: 1.98, h: 0.72 });
     ctx.prop('neonSign', 8.6, -hd, 0, { text: '2차', color: '#ffd23a', y: 1.6, h: 0.72 });
     for (const z of [-6.6, -3.4]) ctx.prop('boothSeat', 7.3, z, PI / 2, { w: 2.0, noCast: true });
+    // low glossy noraebang tables (solid decor, not flippable → E on a tambourine always means 들기)
+    const kTop = M.std('pubKTable', { color: '#1d1a24', roughness: 0.25, metalness: 0.1 });
+    const kEdge = M.std('pubKEdge', { color: '#ff5fb0', emissive: '#ff3fa0', emissiveIntensity: 0.9, roughness: 0.4 });
     for (const z of [-6.6, -3.4]) {
-      ctx.prop('roundTable', 9.5, z, 0);
-      ctx.prop('tambourine', 9.38, z - 0.12, 0.3, { y: 0.745 });
-      ctx.prop('tambourine', 9.66, z + 0.15, 1.9, { y: 0.745 });
-      ctx.prop('bottle', 9.25, z + 0.22, 0, { y: 0.745 });
+      ctx.box(0.66, 0.4, 1.15, kTop, 8.95, 0, z, { collide: true });
+      ctx.box(0.68, 0.04, 1.17, kEdge, 8.95, 0.345, z, { cast: false });
+      ctx.prop('tambourine', 8.9, z - 0.27, 0.3, { y: 0.4 });
+      ctx.prop('tambourine', 9.0, z + 0.12, 1.9, { y: 0.4 });
+      ctx.prop('bottle', 8.82, z + 0.43, 0, { y: 0.4 });
     }
     ctx.prop('mirrorball', 10.4, -4.3, 0, { tag: 'mirrorball' });
     ctx.box(0.012, 0.18, 0.012, M.std('pubWire', { color: '#9aa0a7', metalness: 0.6, roughness: 0.4 }), 10.4, H - 0.18, -4.3, { cast: false });
@@ -130,12 +134,12 @@ export default {
     // ---------------- elevators (west wall, facing +x), plants, extinguisher
     evZ.forEach((z, i) => ctx.elevator(-hw, z, PI / 2, 'B1', i));
     ctx.decorProp('floorSign', -hw + 0.015, 1.55, 0, PI / 2, { text: 'B1', h: 0.42, color: '#f6ead8' });
-    ctx.prop('plantBig', -12.4, -3.3);
-    ctx.prop('plantBig', -12.4, 3.4);
+    ctx.prop('plantBig', -12.4, -5.7);
+    ctx.prop('plantBig', -12.4, 5.6);
     ctx.prop('plantBig', 3.3, -8.4);
     ctx.prop('plantBig', 2.6, 8.4);
     ctx.prop('plant', 6.3, 8.5);
-    ctx.prop('extinguisher', -12.8, 4.5, PI / 2);
+    ctx.prop('extinguisher', -12.8, 3.9, PI / 2);
 
     // ---------------- people (story pre-dinner: only the owner is here — see hooks.onEnter)
     const face = (dx, dz) => Math.atan2(-dx, -dz);
@@ -194,12 +198,12 @@ export default {
       { sfx: 'fanfare', sub: ['나', '(…아, 아. 마이크 테스트. 하나, 둘.)', 2400], done: 2 },
       { wait: 1.2 },
       { say: ['owner', '오, 100점! 소리 좋네~', 2.4] },
-      { wait: 2.2 },
+      { wait: 2.8 },
       { sub: ['부장 (전화)', '김 대리~ 자리 잡았지? 노래는 자네가 먼저 하는 걸로!', 3200], sfx: 'mumbleLow', face: ['endure', 2] },
       { wait: 3.3 },
       { sub: ['부장 (전화)', '아, 그리고 오늘은 1/N이야~ 하하!', 2800], sfx: 'mumbleLow' },
-      { stress: 8, face: ['endure', 2.5] },
-      { wait: 3.2 },
+      { stress: 8, face: ['endure', 2.5], sfx: 'sigh' },
+      { wait: 4.2 },
     ],
   },
 
@@ -222,7 +226,7 @@ export default {
       l.userData.off = true;
       if (r) l.position.set(r.body.position.x, r.body.position.y + 0.4, r.body.position.z);
       l.color.set('#ff8ad8');
-      l.intensity = Math.max(0, l.intensity - dt * 4);
+      l.intensity = Math.max(0, l.intensity - dt * 10);
     },
     onDestroy(game, rec) {
       if (rec.tag === 'sojuFridge') { const o = game.npc('owner'); if (o && !o.gone) game.say(o, '내 소주!!', 2.4); }
