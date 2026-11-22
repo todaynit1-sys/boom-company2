@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>UI 시험대</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
+<link rel="stylesheet" href="../css/style.css">
+<style>
+  #scenes { position: fixed; right: 8px; bottom: 8px; z-index: 999; display: flex; gap: 4px; flex-wrap: wrap; max-width: 60vw; justify-content: flex-end; opacity: .25; }
+  #scenes:hover { opacity: 1; }
+  #scenes a { font: 700 11px sans-serif; color: #fff; background: #000a; padding: 3px 6px; border-radius: 4px; text-decoration: none; }
+  .shot #scenes { display: none; }
+</style>
+</head>
+<body>
+<div id="mount"></div>
+<nav id="scenes"></nav>
+<script type="module">
+// index.html의 실제 화면 구조를 그대로 가져와 진짜 js/ui.js 를 돌린다.
+const q = new URLSearchParams(location.search);
+const scene = q.get('scene') || 'hud1';
+if (q.get('shot') !== '0') document.documentElement.classList.add('shot');
+for (const s of ['title', 'hud1', 'hud2', 'hud3', 'hud4', 'banner', 'bill', 'pause', 'fade', 'elevator', 'touch']) {
+  const a = document.createElement('a');
+  const p = new URLSearchParams(location.search); p.set('scene', s); p.set('shot', '0');
+  a.href = '?' + p; a.textContent = s; document.getElementById('scenes').appendChild(a);
+}
+
+const html = await (await fetch('../index.html', { cache: 'no-store' })).text();
+const doc = new DOMParser().parseFromString(html, 'text/html');
+doc.querySelectorAll('script').forEach((s) => s.remove());
+document.getElementById('mount').replaceWith(...doc.body.children);
+
+// 사진 대신 쓰는 사무실 배경
+const cv = document.getElementById('cv');
+const W = innerWidth, Hh = innerHeight;
+cv.width = W * devicePixelRatio; cv.height = Hh * devicePixelRatio;
+const g = cv.getContext('2d');
+g.scale(devicePixelRatio, devicePixelRatio);
+const kind = scene === 'hud1' || scene === 'touch' || scene === 'title' ? 'lobby' : scene === 'hud3' ? 'sunset' : 'office';
+function paint() {
+  const hz = Hh * 0.45;
+  let sky = g.createLinearGradient(0, 0, 0, hz);
+  sky.addColorStop(0, kind === 'lobby' ? '#e9e2d6' : '#ece5d8'); sky.addColorStop(1, kind === 'sunset' ? '#e8b48e' : '#d8d0c2');
+  g.fillStyle = sky; g.fillRect(0, 0, W, hz);
+  // 창문
+  for (let i = 0; i < 9; i++) {
+    const x = W * 0.08 + i * W * 0.1, w = W * 0.08;
+    const gw = g.createLinearGradient(0, hz * 0.35, 0, hz);
+    if (kind === 'sunset') { gw.addColorStop(0, '#f6a77a'); gw.addColorStop(1, '#ffd3a1'); }
+    else { gw.addColorStop(0, '#9cc7e8'); gw.addColorStop(1, '#d9ecf5'); }
+    g.fillStyle = gw; g.fillRect(x, hz * 0.35, w, hz * 0.62);
+    g.fillStyle = kind === 'sunset' ? '#8a6a7a' : '#8ea3b5';
+    for (let b = 0; b < 3; b++) g.fillRect(x + b * w * 0.33, hz * (0.62 + (b % 2) * 0.1), w * 0.25, hz * 0.4);
+  }
+  // 바닥
+  const fl = g.createLinearGradient(0, hz, 0, Hh);
+  if (kind === 'lobby') { fl.addColorStop(0, '#d9d3c8'); fl.addColorStop(1, '#cfc7ba'); }
+  else { fl.addColorStop(0, '#4c6597'); fl.addColorStop(1, '#3a5184'); }
+  g.fillStyle = fl; g.fillRect(0, hz, W, Hh - hz);
+  // 책상들
+  g.fillStyle = kind === 'lobby' ? '#a27a52' : '#c9b48f';
+  for (let i = 0; i < 5; i++) g.fillRect(W * (0.02 + i * 0.2), hz + Hh * 0.05, W * 0.15, Hh * 0.06);
+  g.fillStyle = '#7d8494';
+  for (let i = 0; i < 5; i++) g.fillRect(W * (0.03 + i * 0.2), hz + Hh * 0.11, W * 0.13, Hh * 0.12);
+  // 기둥
+  g.fillStyle = kind === 'lobby' ? '#b9ad9c' : '#3e67b0';
+  g.fillRect(W * 0.33, 0, W * 0.04, hz + Hh * 0.08); g.fillRect(W * 0.74, 0, W * 0.05, hz + Hh * 0.1);
+  // 주인공 실루엣
+  g.fillStyle = '#25294a';
+  const px = W * 0.4, py = Hh * 0.55, s = Math.min(W, Hh) / 941;
+  g.beginPath(); g.ellipse(px, py, 58 * s, 60 * s, 0, 0, 7); g.fill();
+  g.fillRect(px - 70 * s, py + 50 * s, 140 * s, 220 * s);
+  g.fillRect(px - 55 * s, py + 260 * s, 45 * s, 150 * s); g.fillRect(px + 10 * s, py + 260 * s, 45 * s, 150 * s);
+  // 상호작용 대상
+  g.strokeStyle = '#ffd23f'; g.lineWidth = 3;
+  g.fillStyle = '#9a9ca6';
+  const ox = W * 0.66, oy = Hh * 0.42;
+  g.fillRect(ox, oy, W * 0.12, Hh * 0.3); g.strokeRect(ox, oy, W * 0.12, Hh * 0.3);
+}
+paint();
+
+const { ui } = await import('../js/ui.js?v=' + Date.now());
+const log = (...a) => console.log('[handler]', ...a);
+ui.init({
+  start: (m, o) => log('start', m, o), pause: () => { log('pause'); ui.pause(true, { canSkip: true }); },
+  resume: () => { log('resume'); ui.pause(false); }, retry: () => log('retry'), toTitle: () => log('toTitle'),
+  quit: () => log('quit'), skipTask: () => log('skipTask'), setting: (k, v) => log('setting', k, v),
+  elevator: (id) => log('elevator', id), action: (n, d) => log('action', n, d),
+});
+window.ui = ui;
+
+const KEYS = [{ k: 'WASD', t: '이동' }, { k: 'SPACE', t: '점프' }, { k: 'Q', t: '필살기' }];
+const at = (fx, fy) => [W * fx, Hh * fy];
+function hud1() {
+  ui.hud(true);
+  ui.mission({ title: '커피 심부름', sub: '1층 · 낮 12:10', quote: '아아 12잔, 자네 카드로' });
+  ui.tasks([{ text: '아이스 아메리카노 받기' }]);
+  ui.stress(54); ui.money(0); ui.keys(KEYS); ui.special(0.45);
+  const [x, y] = at(0.51, 0.365);
+  const loop = () => { ui.prompt({ key: 'E', text: '커피 받기', x, y }); requestAnimationFrame(loop); }; loop();
+}
+const S = {
+  title() { ui.hud(false); ui.title(true, { best: 128000, days: 2 }); },
+  hud1,
+  touch: hud1,
+  hud2() {
+    ui.hud(true);
+    ui.mission({ title: '1분 난동', sub: '7층 · 사무실', tone: 'rage' });
+    ui.tasks([{ text: '책상 뒤집기', plain: true }]);
+    ui.stress(100); ui.money(128000, '피해 총액'); ui.timer(24); ui.combo(12); ui.keys(KEYS); ui.special(1);
+    ui.vignette(0.3);
+    const [x, y] = at(0.57, 0.54);
+    ui.prompt({ key: 'E', text: '엎기', x, y });
+    const pop = () => ui.moneyPop(W * 0.62, Hh * 0.35, 24000); pop(); setInterval(pop, 500);
+  },
+  hud3() {
+    ui.hud(true);
+    ui.mission({ title: '퇴근 5분 전', sub: '7층 · 오후 5:50' });
+    ui.tasks([{ text: '추가 업무 받기' }]);
+    ui.stress(86); ui.money(0, '피해 금액'); ui.keys(KEYS);
+    ui.bubble('boss', { text: '이것만 하고 가~', x: W * 0.58, y: Hh * 0.33 });
+    ui.prompt({ key: 'E', text: '서류 받기', x: W * 0.64, y: Hh * 0.545, hold: 0.4 });
+  },
+  hud4() {
+    ui.hud(true);
+    ui.mission({ title: '복합기 용지 걸림', sub: '7층 · 오후 2:20', note: '급한 인쇄 한 장이 안 나온다' });
+    ui.tasks([{ text: '용지 걸림 확인', done: false }, { text: '팀장님께 보고', done: true }]);
+    ui.stress(42); ui.money(0, '피해 금액'); ui.keys(KEYS);
+    ui.prompt({ key: 'E', text: '용지 빼기', x: W * 0.62, y: Hh * 0.51 });
+    ui.subtitle('김 대리', '아 진짜… 또 걸렸어? 나 급한데', 999999);
+  },
+  banner() { S.hud2(); ui.banner('스트레스 100%', '1분 난동 시작!', 999999); ui.flash('#fff', 300); },
+  pause() { S.hud4(); ui.pause(true, { canSkip: true }); },
+  bill() {
+    ui.hud(false);
+    ui.bill({
+      mode: 'rush', company: '(주)가족같은회사', total: 1284000, best: 980000, isBest: true, relief: 92,
+      title: '전설의 퇴사자', comment: '내일 출근은… 하는 걸로.',
+      items: [
+        { name: '모니터', count: 6, amount: 540000 }, { name: '사무용 의자', count: 4, amount: 280000 },
+        { name: '복합기', count: 1, amount: 320000 }, { name: '화분', count: 7, amount: 84000 },
+        { name: '서류 더미', count: 12, amount: 36000 }, { name: '커피잔', count: 8, amount: 24000 },
+      ],
+    });
+  },
+  fade() { S.hud1(); ui.fade({ time: '낮 12:10', title: '커피 심부름', sub: '1층 로비' }); },
+  elevator() {
+    S.hud3();
+    ui.elevator({ current: 'office', floors: [
+      { id: 'roof', label: '옥상', sub: '바람 쐬는 곳' }, { id: 'office', label: '7층', sub: '우리 팀 사무실' },
+      { id: 'meeting', label: '3층', sub: '대회의실' }, { id: 'lobby', label: '1층', sub: '로비·카페' },
+    ] });
+  },
+};
+S.smoke = async () => {
+  // 모든 API를 한 번씩 불러 오류가 없는지 본다
+  const out = [];
+  const ok = (n, v) => out.push(n + ':' + v);
+  S.hud1();
+  ui.combo(5); ui.combo(null); ui.timer(9.2); ok('timer', document.getElementById('timer').textContent);
+  ui.timer(null); ui.special(1); ui.special(0.2); ui.vignette(0.8); ui.vignette(0);
+  ui.flash('#f00', 100); ui.toast('알림'); ui.banner('끝!', '', 500);
+  ui.bubble('a', { text: '안녕', x: 100, y: 200 }); ui.bubble('b', { text: '두 번째 말풍선이 아주 길게 이어집니다 줄바꿈 확인', x: 300, y: 200 }); ui.bubble('a', null);
+  ui.prompt({ key: 'E', text: '집기', x: 5000, y: -50, hold: 0.5 }); ok('promptClamped', document.getElementById('prompt').style.transform);
+  ui.prompt(null); ok('promptHidden', document.getElementById('prompt').hidden);
+  for (let i = 0; i < 20; i++) ui.moneyPop(200 + i, 200, 1000 * i);
+  ui.money(5000); ok('money', document.getElementById('money-val').textContent);
+  ui.tasks([{ text: '하나', done: true }, { text: '둘', plain: true }]); ok('tasks', document.getElementById('tasks').children.length);
+  ui.mission(null); ui.keys(null);
+  const t0 = performance.now();
+  await ui.fade({ time: '오후 5:50', title: '퇴근 5분 전', sub: '7층' }, 600); ok('fadeIn', Math.round(performance.now() - t0));
+  await ui.fadeOut(); ok('fadeOut', Math.round(performance.now() - t0) + ' hidden=' + document.getElementById('fade').hidden);
+  await ui.fade(null, 200); await ui.fadeOut(); ok('blankFade', document.getElementById('fade').hidden);
+  ui.title(true, { best: null, days: 0 });
+  document.querySelector('[data-free="lobby"]').click();
+  document.querySelector('.tg[data-set="calm"]').click(); ok('calm', ui.settings.calm + ' ' + localStorage.getItem('ppg.settings'));
+  document.querySelector('.tg[data-set="calm"]').click();
+  document.querySelector('[data-g="f"]').click(); ok('gender', ui.settings.gender);
+  document.querySelector('[data-g="m"]').click();
+  ui.title(false);
+  ui.elevator({ current: 'lobby', floors: [{ id: 'office', label: '7층', sub: '사무실' }, { id: 'lobby', label: '1층', sub: '로비' }] });
+  document.querySelector('.ev-btn[data-id="office"]').click(); ok('evHidden', document.getElementById('elevator').hidden);
+  ui.pause(true, { canSkip: false }); ok('skipHidden', document.getElementById('p-skip').hidden); document.getElementById('p-resume').click();
+  ui.bill({ mode: 'free', items: [], total: 0, best: 0, isBest: false, relief: 10, title: '', comment: '' }); ui.bill(null);
+  ui.hud(false); ui.hud(true);
+  window.__smoke = 'SMOKE ' + out.join(' | ');
+};
+// 터치 입력 흉내 (&touch=1 과 함께)
+S.touchsmoke = () => {
+  S.hud1();
+  const acts = [];
+  const pe = (type, id, x, y) => {
+    const el = document.elementFromPoint(x, y);
+    el.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, pointerType: 'touch', bubbles: true, cancelable: true }));
+    return el;
+  };
+  ui.init({ action: (n, d) => acts.push(n + (d ? '↓' : '↑')) });
+  const jx = 80, jy = Hh - 80;
+  pe('pointerdown', 11, jx, jy); pe('pointermove', 11, jx, jy - 200);
+  const j1 = `${ui.joy.x.toFixed(2)},${ui.joy.y.toFixed(2)}`;
+  pe('pointerup', 11, jx, jy - 200);
+  pe('pointerdown', 12, W * 0.7, Hh * 0.3); pe('pointermove', 12, W * 0.7 + 30, Hh * 0.3 + 10);
+  const lk = `${ui.look.dx},${ui.look.dy}`; pe('pointerup', 12, W * 0.7 + 30, Hh * 0.3 + 10);
+  const btn = document.querySelector('.t-attack').getBoundingClientRect();
+  const hit = pe('pointerdown', 13, btn.left + btn.width / 2, btn.top + btn.height / 2);
+  hit.dispatchEvent(new PointerEvent('pointerup', { pointerId: 13, pointerType: 'touch', bubbles: true }));
+  window.__smoke = `TOUCH joy=${j1} joyAfter=${ui.joy.x},${ui.joy.y} look=${lk} hit=${hit.className} acts=${acts.join(',')}`;
+};
+(S[scene] || hud1)();
+</script>
+</body>
+</html>

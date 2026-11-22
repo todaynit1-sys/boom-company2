@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>회사 뿌개기</title>
+<meta name="description" content="복합기 용지 걸림, 커피 열두 잔 심부름, 퇴근 5분 전 추가 업무. 참다 참다 스트레스가 100%가 되면 1분 동안 사무실을 뒤집어엎는 3D 직장인 게임.">
+<meta name="theme-color" content="#161925">
+<meta property="og:type" content="website">
+<meta property="og:title" content="회사 뿌개기">
+<meta property="og:description" content="참다 참다 터지는 하루. 스트레스 100%가 되면 1분 동안 사무실을 뒤집고 피해 청구서를 받아 보세요.">
+<meta property="og:locale" content="ko_KR">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css?v=2">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="ui">
+
+  <!-- 월드 위에 뜨는 것: 행동 안내, 말풍선, 금액 -->
+  <div id="world" aria-hidden="true">
+    <div id="prompt" class="prompt" hidden><span class="kc"><b>E</b></span><span class="pt"></span></div>
+  </div>
+
+  <div id="vignette" aria-hidden="true"></div>
+
+  <!-- 터치 조작 -->
+  <div id="touch" hidden>
+    <div id="look-zone"></div>
+    <div id="joy" aria-hidden="true"><div id="joy-base"><div id="joy-knob"></div></div></div>
+    <div id="tbtns">
+      <button type="button" class="tbtn t-attack" data-act="attack">때리기</button>
+      <button type="button" class="tbtn t-interact" data-act="interact">행동</button>
+      <button type="button" class="tbtn t-jump" data-act="jump">점프</button>
+      <button type="button" class="tbtn t-special" data-act="special"><span>필살기</span></button>
+    </div>
+  </div>
+
+  <!-- 게임 중 화면 정보 -->
+  <div id="hud" hidden>
+    <div class="hud-tl">
+      <div id="mission" class="card" hidden>
+        <h2 id="m-title"></h2>
+        <p id="m-sub"></p>
+        <p id="m-quote" hidden></p>
+        <p id="m-note" hidden></p>
+      </div>
+      <ul id="tasks"></ul>
+    </div>
+    <div class="hud-tc">
+      <div id="stress" class="pill">
+        <span class="s-lbl">스트레스</span>
+        <span class="s-bar"><i id="stress-fill"></i><span class="s-in">스트레스 <b>100%</b></span></span>
+        <b id="stress-pct">0%</b>
+      </div>
+      <div id="timer" hidden></div>
+    </div>
+    <div class="hud-tr">
+      <div class="tr-row">
+        <div id="money" class="pill"><span id="money-lbl">피해액</span><b id="money-val">0원</b></div>
+        <button type="button" id="btn-pause" class="sq" aria-label="멈춤"><i></i><i></i></button>
+      </div>
+      <div id="combo" hidden></div>
+    </div>
+    <div id="keys"></div>
+  </div>
+
+  <div id="subtitle" hidden><b class="sp"></b><span class="tx"></span></div>
+  <div id="toast" hidden></div>
+  <div id="banner" hidden><strong></strong><span></span></div>
+  <div id="flash" aria-hidden="true"></div>
+
+  <!-- 엘리베이터 -->
+  <div id="elevator" class="modal" hidden>
+    <div class="ev-panel">
+      <div class="ev-head"><span class="ev-arrow"></span><h3>몇 층으로 갈까요?</h3></div>
+      <div id="ev-list"></div>
+      <button type="button" id="ev-close" class="btn ghost">닫기</button>
+    </div>
+  </div>
+
+  <!-- 첫 화면 -->
+  <div id="title" hidden>
+    <div class="t-panel">
+      <div class="t-brand">
+        <h1 class="logo"><span class="l1">회사</span><span class="l2">뿌개기</span></h1>
+        <p class="tagline">참다 참다 터지는 하루</p>
+      </div>
+      <div class="t-menu">
+        <button type="button" class="mbtn m-story" data-mode="story">
+          <b>출근하기</b><small>하루 이야기 · 약 5분</small><em id="t-days" hidden></em>
+        </button>
+        <button type="button" class="mbtn m-rush" data-mode="rush">
+          <b>1분 난동</b><small id="t-best">최고 기록 없음 · 첫 기록을 남겨 보세요</small>
+        </button>
+        <div class="mbtn m-free">
+          <b>자유 난동</b><small>시간 제한 없이, 층을 골라요</small>
+          <div class="floors">
+            <button type="button" data-free="office">7층 사무실</button>
+            <button type="button" data-free="lobby">1층 로비·카페</button>
+          </div>
+        </div>
+      </div>
+      <div class="t-opts">
+        <div class="seg" id="t-gender" role="group" aria-label="캐릭터">
+          <span class="seg-lbl">캐릭터</span>
+          <button type="button" data-g="m">남</button>
+          <button type="button" data-g="f">여</button>
+        </div>
+        <div class="toggles">
+          <button type="button" class="tg" data-set="sfx">효과음</button>
+          <button type="button" class="tg" data-set="bgm">배경음악</button>
+          <button type="button" class="tg" data-set="vibe">진동</button>
+          <button type="button" class="tg" data-set="calm">흔들림 약하게</button>
+        </div>
+      </div>
+      <p class="t-help" id="t-help"></p>
+    </div>
+  </div>
+
+  <!-- 멈춤 -->
+  <div id="pause" class="modal" hidden>
+    <div class="p-card">
+      <h3>잠깐 멈춤</h3>
+      <div class="p-btns">
+        <button type="button" class="btn primary" id="p-resume">계속하기</button>
+        <button type="button" class="btn" id="p-skip" hidden>할 일 하나 건너뛰기</button>
+        <button type="button" class="btn warn" id="p-quit">그만두고 청구서 받기</button>
+        <button type="button" class="btn ghost" id="p-title">처음으로</button>
+      </div>
+      <ul class="p-keys" id="p-keys"></ul>
+    </div>
+  </div>
+
+  <!-- 청구서 -->
+  <div id="bill" class="modal" hidden>
+    <div class="b-wrap">
+      <div class="receipt">
+        <div class="r-scroll">
+          <p class="r-co" id="r-co"></p>
+          <h3 class="r-h">피해 청구서</h3>
+          <p class="r-meta" id="r-meta"></p>
+          <table class="r-items"><tbody id="r-items"></tbody></table>
+          <div class="r-total"><span>합계</span><b id="r-total"></b></div>
+          <p class="r-best" id="r-best"></p>
+          <div class="r-relief"><span>스트레스 해소</span><span class="rb"><i id="r-relief-bar"></i></span><b id="r-relief"></b></div>
+          <div class="r-rank"><span class="stamp" id="r-rank"></span></div>
+          <p class="r-comment" id="r-comment"></p>
+        </div>
+      </div>
+      <div class="b-btns">
+        <button type="button" class="btn primary" id="b-retry">다시 하기</button>
+        <button type="button" class="btn share" id="b-share">자랑하기</button>
+        <button type="button" class="btn ghost" id="b-title">처음으로</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 장면 전환 시계 카드 -->
+  <div id="fade" hidden>
+    <div class="f-card">
+      <div class="clock"><i class="h"></i><i class="m"></i><span class="dot"></span></div>
+      <p class="f-time" id="f-time"></p>
+      <h3 class="f-title" id="f-title"></h3>
+      <p class="f-sub" id="f-sub"></p>
+    </div>
+  </div>
+
+  <div id="boot"><div><p class="logo sm"><span class="l1">회사</span><span class="l2">뿌개기</span></p><p class="boot-t">불러오는 중…</p></div></div>
+</div>
+
+<script type="module" src="js/main.js?v=2"></script>
+</body>
+</html>

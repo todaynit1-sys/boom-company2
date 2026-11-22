@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>회사 뿌개기 — 오디오 테스트</title>
+<style>
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 16px; background: #faf7f2; color: #222; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { font: inherit; padding: 5px 10px; border: 1px solid #bbb; border-radius: 6px; background: #fff; cursor: pointer; }
+  button:hover { background: #ffeccc; }
+  button.on { background: #ffd27a; }
+  table { border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  td, th { border: 1px solid #ddd; padding: 2px 8px; text-align: right; }
+  td:first-child, th:first-child { text-align: left; }
+  tr.bad td { background: #ffd9d9; }
+  #status { margin: 8px 0; color: #555; }
+  label { margin-right: 12px; }
+</style>
+</head>
+<body>
+<h1>회사 뿌개기 — 오디오 테스트</h1>
+<div id="status">첫 버튼을 누르면 오디오가 켜집니다.</div>
+<div class="grid">
+  <button id="initBtn">init()</button>
+  <label><input type="checkbox" id="sfxOn" checked> 효과음</label>
+  <label><input type="checkbox" id="bgmOn" checked> 배경음</label>
+  <label>긴장도 <input type="range" id="inten" min="0" max="1" step="0.01" value="0"> <span id="intenVal">0.00</span></label>
+  <label>pitch <input type="number" id="pitch" value="1" step="0.1" min="0.25" max="4" style="width:60px"></label>
+  <button id="duck">duck()</button>
+  <button id="combo">coin combo ×12</button>
+  <button id="burst">40개 동시 파괴</button>
+  <button id="render">render check</button>
+</div>
+<h2>배경음</h2>
+<div class="grid" id="music"></div>
+<h2>효과음</h2>
+<div class="grid" id="sfx"></div>
+<h2>렌더 검사</h2>
+<div id="results"></div>
+
+<script type="module">
+import { audio, audioLab } from '../js/audio.js';
+
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $('status').textContent = s; };
+const pitch = () => Number($('pitch').value) || 1;
+
+// pre-init calls must be silent no-ops
+const preInit = [];
+try {
+  audio.sfx('coin'); audio.sfx('noSuchSound'); audio.music('office'); audio.music('noSuchTrack'); audio.intensity(0.5);
+  audio.duck(); audio.suspend(); audio.resume(); audio.setEnabled({ sfx: true }); audio.intensity(0);
+  preInit.push('pre-init calls: OK (no throw), state=' + JSON.stringify(audio.state()));
+  audio.music(null);
+} catch (e) { preInit.push('pre-init calls THREW: ' + e.message); }
+
+function ensure() { audio.init(); setTimeout(() => status('state: ' + JSON.stringify(audio.state())), 150); }
+$('initBtn').onclick = ensure;
+$('sfxOn').onchange = (e) => audio.setEnabled({ sfx: e.target.checked });
+$('bgmOn').onchange = (e) => audio.setEnabled({ bgm: e.target.checked });
+$('inten').oninput = (e) => { audio.intensity(+e.target.value); $('intenVal').textContent = (+e.target.value).toFixed(2); };
+$('duck').onclick = () => { ensure(); audio.duck(0.6, 600); };
+$('combo').onclick = () => { ensure(); for (let i = 0; i < 12; i++) setTimeout(() => audio.sfx('coin', { pitch: 1 + i * 0.09 }), i * 110); };
+$('burst').onclick = () => {
+  ensure();
+  const n = ['breakGlass', 'breakWood', 'breakMetal', 'breakCeramic', 'breakPlastic', 'crash', 'hitMetal', 'coin'];
+  for (let i = 0; i < 40; i++) audio.sfx(n[i % n.length], { pan: Math.random() * 2 - 1 });
+  setTimeout(() => status('state: ' + JSON.stringify(audio.state())), 50);
+};
+
+const mus = $('music');
+for (const name of [...audioLab.trackNames, null]) {
+  const b = document.createElement('button');
+  b.textContent = name ?? '정지 (null)';
+  b.onclick = () => {
+    ensure(); audio.music(name);
+    mus.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b && name));
+  };
+  mus.appendChild(b);
+}
+const sfxBox = $('sfx');
+for (const name of audioLab.sfxNames) {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { ensure(); audio.sfx(name, { pitch: pitch() }); };
+  sfxBox.appendChild(b);
+}
+
+const f = (x, n = 3) => x.toFixed(n);
+const db = (x) => (x > 0 ? (20 * Math.log10(x)).toFixed(1) : '-inf');
+function row(cells, bad) { return '<tr' + (bad ? ' class="bad"' : '') + '>' + cells.map((c) => '<td>' + c + '</td>').join('') + '</tr>'; }
+function flags(r, { silent = 0.01 } = {}) {
+  const out = [];
+  if (r.nan) out.push('NaN');
+  if (r.peak > 1) out.push('CLIP');
+  if (r.peak < silent) out.push('SILENT');
+  return out.join(' ');
+}
+
+async function renderCheck() {
+  status('렌더링 중…');
+  const res = $('results');
+  let html = '<p>' + preInit.join('<br>') + '</p>';
+  let problems = 0;
+
+  html += '<h3>효과음 (빌더 원음, 압축기 전)</h3><table id="sfxTable"><tr><th>name</th><th>peak</th><th>peak dB</th><th>RMS</th><th>dur s</th><th>flags</th></tr>';
+  for (const name of audioLab.sfxNames) {
+    const r = audioLab.analyse(await audioLab.renderSfx(name));
+    const fl = flags(r); if (fl) problems++;
+    html += row([name, f(r.peak), db(r.peak), f(r.rms, 4), f(r.dur, 2), fl], !!fl);
+  }
+  html += '</table>';
+
+  html += '<h3>coin 콤보 음높이</h3><table><tr><th>pitch</th><th>peak</th><th>RMS</th><th>flags</th></tr>';
+  for (const p of [0.5, 1, 1.25, 1.5, 2, 3, 4]) {
+    const r = audioLab.analyse(await audioLab.renderSfx('coin', { pitch: p }));
+    const fl = flags(r); if (fl) problems++;
+    html += row([p, f(r.peak), f(r.rms, 4), fl], !!fl);
+  }
+  html += '</table>';
+
+  html += '<h3>배경음 8초 (트랙 원음, 음악 버스 볼륨 1)</h3><table id="musTable"><tr><th>track</th><th>intensity</th><th>peak</th><th>peak dB</th><th>RMS</th><th>RMS dB</th><th>flags</th></tr>';
+  for (const name of audioLab.trackNames) {
+    for (const inten of [0, 1]) {
+      const r = audioLab.analyse(await audioLab.renderMusic(name, { seconds: 8, intensity: inten }));
+      const fl = flags(r, { silent: 0.05 }); if (fl) problems++;
+      html += row([name, inten, f(r.peak), db(r.peak), f(r.rms, 4), db(r.rms), fl], !!fl);
+    }
+  }
+  html += '</table>';
+
+  html += '<h3>배경음 게임 내 레벨 (전체 마스터 체인, -15 dB 버스)</h3><table><tr><th>track</th><th>peak</th><th>RMS</th><th>RMS dB</th></tr>';
+  for (const name of audioLab.trackNames) {
+    const r = audioLab.analyse(await audioLab.renderMusic(name, { seconds: 8, raw: false }));
+    html += row([name, f(r.peak), f(r.rms, 4), db(r.rms)], r.nan || r.peak > 1);
+  }
+  html += '</table>';
+
+  html += '<h3>폭주 테스트 (마스터 체인 통과: 0.2 s에 40회 동시 + 0.25~0.73 s에 80회, vol 1.5, rage 배경음)</h3>';
+  const st = await audioLab.renderStress();
+  const rs = audioLab.analyse(st.buf);
+  const sfl = flags(rs); if (sfl) problems++;
+  html += '<table><tr><th>calls</th><th>accepted</th><th>max voices</th><th>peak</th><th>RMS</th><th>flags</th></tr>' +
+    row([st.calls, st.accepted, st.maxVoices, f(rs.peak), f(rs.rms, 4), sfl], !!sfl) + '</table>';
+
+  html += '<p id="done">DONE problems=' + problems + '</p>';
+  res.innerHTML = html;
+  status('렌더 검사 완료 — 문제 ' + problems + '개');
+}
+$('render').onclick = () => renderCheck().catch((e) => { $('results').textContent = 'ERROR ' + e.stack; });
+if (new URLSearchParams(location.search).get('auto') === '1') renderCheck().catch((e) => { $('results').innerHTML = '<p id="done">ERROR ' + e.stack + '</p>'; });
+</script>
+</body>
+</html>

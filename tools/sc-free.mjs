@@ -1,0 +1,31 @@
+// Free mode: office rampage → elevator to the lobby → lobby rampage → back up (wreck persists) → quit to bill.
+export default async ({ ev, shot, log, step }) => {
+  await ev('__ppg.start("free", { floor: "office" })');
+  await ev('__ppg.auto(true)');
+  let s = await step(600, 30);
+  log('office', JSON.stringify({ scene: s.scene, floor: s.floor, money: s.money, timeLeft: s.timeLeft, counts: s.counts, bodies: s.bodies, render: s.render }));
+  await shot('f1-free-office');
+  const destroyedOffice = await ev('__ppg.G.floors.office.phys.records.filter(r => r.destroyed || r.removed).length');
+  await ev('__ppg.ride("lobby")');
+  for (let i = 0; i < 80 && s.floor !== 'lobby'; i++) s = await step(30, 30);
+  log('arrived', JSON.stringify({ floor: s.floor, p: s.player, preset: s.preset, busy: s.busy }));
+  if (s.floor !== 'lobby') throw new Error('did not reach the lobby');
+  s = await step(20);
+  await shot('f2-lobby-arrive');
+  s = await step(600, 30);
+  log('lobby', JSON.stringify({ money: s.money, counts: s.counts, tasks: s.tasks, npcs: s.npcs, bodies: s.bodies, render: s.render }));
+  await shot('f3-lobby-wreck');
+  await ev('__ppg.ride("office")');
+  for (let i = 0; i < 80 && s.floor !== 'office'; i++) s = await step(30, 30);
+  if (s.floor !== 'office') throw new Error('did not get back to the office');
+  const destroyedAgain = await ev('__ppg.G.floors.office.phys.records.filter(r => r.destroyed || r.removed).length');
+  log('office wreck persisted', destroyedOffice, '->', destroyedAgain);
+  s = await step(40);
+  await shot('f4-office-again');
+  await ev('__ppg.auto(false)');
+  await ev('__ppg.quit()');
+  s = await step(60, 30);
+  await shot('f5-bill');
+  log('final', JSON.stringify(s));
+  if (s.scene !== 'bill') throw new Error('free mode did not reach the bill');
+};

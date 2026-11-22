@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Art Test</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #20232a; overflow: hidden; font-family: "Malgun Gothic", sans-serif; }
+  #info { position: fixed; left: 8px; top: 8px; color: #fff; font: 13px/1.4 monospace; background: rgba(0,0,0,.45); padding: 6px 9px; border-radius: 6px; white-space: pre; z-index: 2; }
+  #err { position: fixed; left: 8px; bottom: 8px; right: 8px; color: #fff; background: rgba(200,20,20,.9); font: 13px/1.4 monospace; padding: 6px 9px; white-space: pre-wrap; display: none; z-index: 3; }
+</style>
+<script>
+  window.__errs = [];
+  function __showErr(m) { window.__errs.push(m); var e = document.getElementById('err'); if (e) { e.style.display = 'block'; e.textContent = window.__errs.join('\n'); } }
+  window.addEventListener('error', function (ev) { __showErr('ERR ' + (ev.message || ev.type) + ' @' + (ev.filename || '') + ':' + (ev.lineno || '')); }, true);
+  window.addEventListener('unhandledrejection', function (ev) { __showErr('REJ ' + (ev.reason && (ev.reason.stack || ev.reason.message) || ev.reason)); });
+  var _ce = console.error; console.error = function () { __showErr('console.error ' + Array.prototype.join.call(arguments, ' ')); _ce.apply(console, arguments); };
+  var _cw = console.warn; console.warn = function () { __showErr('console.warn ' + Array.prototype.join.call(arguments, ' ')); _cw.apply(console, arguments); };
+  setTimeout(function () { if (!window.__artReady) __showErr('NOT READY after 6s (module failed to load?)'); }, 6000);
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="info"></div>
+<div id="err"></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { makeCharacter, PRESETS, ANIMS, ONESHOTS, FACES } from '../js/art/chars.js';
+import { makeProp, PROP_TYPES, deskTopLayout } from '../js/art/props.js';
+import { tex } from '../js/art/tex.js';
+
+const Q = new URLSearchParams(location.search);
+const show = Q.get('show') || 'chars';
+const fixedT = Q.has('t') ? parseFloat(Q.get('t')) : null;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#cfd8e3');
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 200);
+const controls = new OrbitControls(camera, renderer.domElement);
+
+scene.add(new THREE.HemisphereLight('#fff7ea', '#8b8070', 1.1));
+const sun = new THREE.DirectionalLight('#fff1dc', 2.3);
+sun.position.set(6, 12, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
+scene.add(sun, sun.target);
+const fill = new THREE.DirectionalLight('#cfe0ff', 0.5); fill.position.set(-6, 5, -4); scene.add(fill);
+
+const floorTex = (show === 'lobby' ? tex.terrazzo() : tex.carpet()).clone(); floorTex.needsUpdate = true;
+floorTex.repeat.set(60, 60);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.95 }));
+floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+
+function label(text, x, y, z, s = 0.25, col = '#111') {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(0, 10, 512, 76);
+  g.fillStyle = col; g.font = 'bold 48px "Malgun Gothic", sans-serif'; g.textAlign = 'center'; g.fillText(text, 256, 66);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false }));
+  sp.scale.set(s * 5.33, s, 1); sp.position.set(x, y, z); sp.renderOrder = 10; scene.add(sp); return sp;
+}
+
+const chars = [];
+const updaters = [];
+let infoExtra = '';
+const bounds = new THREE.Box3();
+
+function fit(target, dist, height, lookY = null) {
+  camera.position.set(target.x, height, target.z + dist);
+  controls.target.set(target.x, lookY ?? target.y, target.z);
+  controls.update();
+}
+
+if (show === 'chars') {
+  const ids = Object.keys(PRESETS);
+  const animName = Q.get('anim');
+  const face = Q.get('face');
+  ids.forEach((id, i) => {
+    const c = makeCharacter({ preset: id, seed: i + 1 });
+    c.group.position.set((i - (ids.length - 1) / 2) * 1.05, 0, 0);
+    scene.add(c.group); chars.push(c);
+    label(id, c.group.position.x, 1.85 * (c.group.scale.x), 0, 0.17);
+    if (animName) c.setAnim(animName);
+    if (face) c.setFace(face);
+  });
+  if (!animName) {
+    let k = 0;
+    updaters.push((dt, t) => {
+      const idx = Math.floor(t / 2.5) % ANIMS.length;
+      if (idx !== k) { k = idx; chars.forEach((c) => c.setAnim(ANIMS[k])); }
+      if (!face) { const f = FACES[Math.floor(t / 2.5) % FACES.length]; chars.forEach((c) => c.setFace(f)); }
+      infoExtra = 'anim ' + ANIMS[k];
+    });
+  }
+  fit(new THREE.Vector3(0, 0.8, 0), Q.has('zoom') ? 3.2 : 8.6, 1.7, 0.8);
+} else if (show === 'anims' || show === 'shots') {
+  let list = show === 'anims' ? ANIMS : ONESHOTS;
+  if (Q.get('sel')) list = Q.get('sel').split(',');
+  const cols = Math.min(6, list.length);
+  const preset = Q.get('preset') || 'player';
+  list.forEach((a, i) => {
+    const c = makeCharacter({ preset, seed: 3 });
+    const col = i % cols, row = Math.floor(i / cols);
+    c.group.position.set((col - (cols - 1) / 2) * 1.5, 0, row * 2.2);
+    c.group.rotation.y = Q.has('side') ? Math.PI / 2 : (Q.has('back') ? Math.PI : 0.35);
+    scene.add(c.group); chars.push(c);
+    label(a, c.group.position.x, 2.0, c.group.position.z, 0.2);
+    if (show === 'anims') {
+      c.setAnim(a);
+      if (a === 'carry' || a === 'offer') c.hold(makeProp(a === 'carry' ? 'coffeeTray' : 'binderStack').group, { both: true });
+      if (a === 'walk' || a === 'run') c._speed = a === 'run' ? 4.5 : 1.6;
+      if (a === 'sit' || a === 'type' || a === 'stretch') { const ch = makeProp('chair'); ch.group.position.copy(c.group.position); ch.group.position.x += Math.sin(c.group.rotation.y) * 0.08; ch.group.position.z += Math.cos(c.group.rotation.y) * 0.08; ch.group.rotation.y = c.group.rotation.y; scene.add(ch.group); }
+      const faceFor = { lookUp: 'sleepy', scared: 'scared', flee: 'shock', cheer: 'smile', rageIdle: 'rage', knocked: 'shock', offer: 'smug', stretch: 'relief', fall: 'shock' };
+      if (faceFor[a]) c.setFace(faceFor[a]);
+    } else {
+      c.setAnim(a === 'land' || a === 'jump' ? 'idle' : 'rageIdle'); c.setFace('rage');
+      c._shot = a;
+    }
+  });
+  if (show === 'shots') {
+    const st = parseFloat(Q.get('shotT') || '0.5');
+    updaters.push((dt, t) => {
+      chars.forEach((c) => { c._st = (c._st ?? 10) + dt; if (c._st > (fixedT != null ? 999 : 1.4)) { c._st = 0; c.playOnce(c._shot); } });
+    });
+    if (fixedT != null) chars.forEach((c) => { c._st = 0; c.playOnce(c._shot); });
+  }
+  const rowsN = Math.ceil(list.length / cols);
+  fit(new THREE.Vector3(0, 0.6, (rowsN - 1) * 1.1), 6.2 + rowsN * 1.6, 5.2, 0.4);
+} else if (show === 'api') {
+  const out = [];
+  const ok = (c, m) => out.push((c ? 'PASS ' : 'FAIL ') + m);
+  const c = makeCharacter({ preset: 'player' }); scene.add(c.group); chars.push(c);
+  ok(Math.abs(c.height - 1.55) < 0.06, 'player height ' + c.height.toFixed(2));
+  const bx = new THREE.Box3().setFromObject(c.group); ok(Math.abs(bx.min.y) < 0.02 && Math.abs(bx.max.y - c.height) < 0.08, `bounds y ${bx.min.y.toFixed(3)}..${bx.max.y.toFixed(3)}`);
+  ok(c.handR && c.handL && c.chest, 'anchors');
+  for (const a of ANIMS) { c.setAnim(a); for (let i = 0; i < 20; i++) c.update(1 / 60, 1.5); }
+  ok(true, 'all anims update');
+  let done = 0; const d = c.playOnce('punch', () => done++); ok(d > 0.2 && d < 1, 'punch dur ' + d);
+  for (let i = 0; i < 40; i++) c.update(1 / 60); ok(done === 1, 'playOnce callback fired');
+  for (const s of ONESHOTS) { c.playOnce(s); for (let i = 0; i < 70; i++) c.update(1 / 60); }
+  ok(true, 'all oneshots run');
+  for (const f of FACES) c.setFace(f); ok(c.face === 'shock', 'faces');
+  const tray = makeProp('coffeeTray'); c.hold(tray.group, { both: true }); ok(tray.group.parent === c.chest, 'hold both -> chest');
+  const ph = makeProp('smartphone'); c.hold(ph.group); ok(ph.group.parent === c.handR, 'hold -> handR');
+  c.hold(null); ok(!tray.group.parent && !ph.group.parent, 'hold(null) clears');
+  c.lookAt(new THREE.Vector3(2, 1.2, 2)); for (let i = 0; i < 30; i++) c.update(1 / 60); c.lookAt(null); ok(true, 'lookAt');
+  const t0 = performance.now(); const many = []; for (let i = 0; i < 40; i++) many.push(makeCharacter({ preset: Object.keys(PRESETS)[i % 10], seed: i }));
+  const t1 = performance.now(); for (let f = 0; f < 120; f++) for (const m of many) m.update(1 / 60, 1.4); const t2 = performance.now();
+  ok(true, `40 chars build ${(t1 - t0).toFixed(0)}ms, update ${((t2 - t1) / 120).toFixed(2)}ms/frame`);
+  many.forEach((m) => m.dispose());
+  const pr = makeProp('printer'); pr.set('jam'); pr.set('ok'); ok(typeof pr.set === 'function', 'printer set');
+  const el = makeProp('elevator', { label: '7F' }); el.set(1); ok(el.frontZ != null, 'elevator frontZ ' + el.frontZ);
+  for (const t of PROP_TYPES) { const p = makeProp(t); const b = new THREE.Box3().setFromObject(p.group); if (Math.abs(b.min.y) > 0.002 || Math.abs((b.max.x + b.min.x) / 2) > 0.002 || Math.abs((b.max.z + b.min.z) / 2) > 0.002) ok(false, 'origin ' + t); }
+  ok(true, 'prop origins checked (' + PROP_TYPES.length + ' types)');
+  const a = makeProp('desk'), b2 = makeProp('desk'); ok(a.group.children[0].children[0].geometry === b2.group.children[0].children[0].geometry, 'desk geometry shared');
+  ok(deskTopLayout(3).length >= 4 && deskTopLayout(3).every((i) => PROP_TYPES.includes(i.type)), 'deskTopLayout ' + deskTopLayout(3).map((i) => i.type).join(','));
+  infoExtra = out.join('\n');
+  fit(new THREE.Vector3(0, 0.8, 0), 3, 1.5, 0.8);
+} else if (show === 'faces') {
+  FACES.forEach((f, i) => {
+    const c = makeCharacter({ preset: Q.get('preset') || 'player', seed: 1 });
+    c.group.position.set((i - 4) * 0.72, 0, 0); c.setFace(f); scene.add(c.group); chars.push(c);
+    label(f, c.group.position.x, 1.72, 0, 0.12);
+  });
+  fit(new THREE.Vector3(0, 1.2, 0), 4.2, 1.35, 1.15);
+} else if (show === 'props') {
+  let types = PROP_TYPES;
+  if (Q.get('only')) types = Q.get('only').split(',');
+  const per = parseInt(Q.get('per') || '0', 10);
+  const page = parseInt(Q.get('page') || '0', 10);
+  if (per) types = types.slice(page * per, page * per + per);
+  const rowW = parseFloat(Q.get('rowW') || '13');
+  let x = 0, z = 0, rowD = 0, maxX = 0;
+  const lines = [];
+  const items = [];
+  for (const t of types) {
+    const p = makeProp(t, t === 'printer' ? {} : {});
+    if (t === 'printer' && Q.get('state') !== 'ok') p.set('jam');
+    if (t === 'elevator') p.set(parseFloat(Q.get('door') || '0.5'));
+    if (t === 'revolvingDoor') p.set(0.3);
+    const w = Math.max(p.size.x, 0.5);
+    if (x + w > rowW && x > 0) { z += rowD + 1.0; x = 0; rowD = 0; }
+    p.group.position.set(x + w / 2, 0, z);
+    if (t === 'ceilingLight') { p.group.position.y = 0.6; p.group.rotation.x = Math.PI; }
+    scene.add(p.group); items.push(p);
+    label(t, x + w / 2, Math.max(p.size.y, 0.3) + 0.25, z, 0.16);
+    x += w + 0.45; maxX = Math.max(maxX, x); rowD = Math.max(rowD, p.size.z);
+    let tris = 0; p.group.traverse((m) => { if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3; });
+    lines.push(`${t.padEnd(14)} ${p.name.padEnd(9)} ${p.size.x.toFixed(2)}×${p.size.y.toFixed(2)}×${p.size.z.toFixed(2)} ${String(p.mass).padStart(4)}kg ${String(p.price).padStart(7)}원 ${p.material.padEnd(7)} tris ${tris | 0}`);
+  }
+  window.__propLines = lines;
+  console.log(lines.join('\n'));
+  infoExtra = Q.has('list') ? lines.join('\n') : '';
+  const cx = maxX / 2, cz = z / 2;
+  const span = Math.max(maxX, z * 1.6);
+  const zm = parseFloat(Q.get('dist') || '1');
+  fit(new THREE.Vector3(cx, 0, cz), (span * 0.75 + 1) * zm, (span * 0.55 + 1) * zm, 0.3);
+  if (Q.has('top')) { camera.position.set(cx, span * 1.1, cz + span * 0.35); controls.update(); }
+} else if (show === 'back' || show === 'scene' || show === 'lobby') {
+  // mini office scene, viewed from the game camera behind the player
+  const player = makeCharacter({ preset: 'player', seed: 9 });
+  scene.add(player.group); chars.push(player);
+  player.setAnim(Q.get('anim') || 'walk'); player._speed = Q.get('anim') ? 0 : 1.6;
+  player.group.rotation.y = Math.PI;
+  if (show === 'lobby') {
+    const ctr = makeProp('cafeCounter'); ctr.group.position.set(-1.5, 0, -4); scene.add(ctr.group);
+    const sign = makeProp('cafeSign'); sign.group.position.set(-1.5, 2.4, -4.6); scene.add(sign.group);
+    const menu = makeProp('menuBoard'); menu.group.position.set(-3.6, 1.3, -4.6); scene.add(menu.group);
+    const esp = makeProp('espresso'); esp.group.position.set(-1.8, 1.05, -4.25); esp.group.rotation.y = Math.PI; scene.add(esp.group);
+    const gr = makeProp('grinder'); gr.group.position.set(-2.4, 1.05, -4.2); scene.add(gr.group);
+    const cs = makeProp('cupStack'); cs.group.position.set(-3.2, 1.05, -3.9); scene.add(cs.group);
+    const tray = makeProp('coffeeTray'); tray.group.position.set(-0.8, 1.05, -3.85); scene.add(tray.group);
+    for (let i = 0; i < 4; i++) { const ic = makeProp('icedCoffee'); ic.group.position.set(-2.95 + i * 0.12, 1.05, -3.75); scene.add(ic.group); }
+    const pos = makeProp('pos'); pos.group.position.set(0.4, 1.05, -3.9); scene.add(pos.group);
+    for (let i = 0; i < 3; i++) { const l = makeProp('pendantLamp'); l.group.position.set(-2.6 + i * 1.1, 1.85, -4.2); scene.add(l.group); }
+    const bar = makeCharacter({ preset: 'barista', seed: 4 }); bar.group.position.set(-1.0, 0, -4.6); scene.add(bar.group); chars.push(bar);
+    const q = [['workerM1', 'phone'], ['workerF1', 'armsCrossed'], ['chubby', 'lookUp']];
+    q.forEach(([p, a], i) => { const c = makeCharacter({ preset: p, seed: 20 + i }); c.group.position.set(1.4 + i * 0.75, 0, -3.0 + i * 0.5); c.group.rotation.y = Math.PI * 0.85; c.setAnim(a); if (a === 'lookUp') c.setFace('sleepy'); scene.add(c.group); chars.push(c); });
+    for (let i = 0; i < 3; i++) { const s = makeProp('stanchion'); s.group.position.set(1.0 + i * 0.9, 0, -2.2 + i * 0.6); scene.add(s.group); }
+    const sofa = makeProp('sofaYellow'); sofa.group.position.set(5, 0, -3); sofa.group.rotation.y = -Math.PI / 2; scene.add(sofa.group);
+    const el = makeProp('elevator', { label: '1F' }); el.group.position.set(4.5, 0, -6); scene.add(el.group);
+    const fs = makeProp('floorSign', { text: '1', underline: false }); fs.group.position.set(5.6, 1.6, -5.99); scene.add(fs.group);
+    const rd = makeProp('revolvingDoor'); rd.group.position.set(2, 0, -9); rd.set(0.4); scene.add(rd.group);
+    for (const [x, z] of [[-4.6, -1], [3.5, -4.5]]) { const p = makeProp('plantBig'); p.group.position.set(x, 0, z); scene.add(p.group); }
+    player.group.position.set(-0.5, 0, 0.2);
+    scene.background = new THREE.Color('#e8e2d8');
+  } else {
+    const rows = 3;
+    let seed = 1;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < 4; c++) {
+      const dx = (c < 2 ? -3.2 : 1.6) + (c % 2) * 1.6, dz = -2 - r * 3.0;
+      const d = makeProp('desk'); d.group.position.set(dx, 0, dz); scene.add(d.group);
+      for (const it of deskTopLayout(seed++)) { const p = makeProp(it.type); p.group.position.set(dx + it.x, it.y, dz + it.z); p.group.rotation.y = it.rotY; scene.add(p.group); }
+      const pt = makeProp('partition'); pt.group.position.set(dx, 0, dz - 0.42); scene.add(pt.group);
+      const ch = makeProp('chair'); ch.group.position.set(dx, 0, dz + 0.62); ch.group.rotation.y = Math.PI; scene.add(ch.group);
+      if ((r + c) % 2 === 0) {
+        const w = makeCharacter({ preset: ['workerM1', 'workerF1', 'workerM2', 'workerF2', 'glasses', 'chubby'][(r * 4 + c) % 6], seed: 30 + r * 4 + c });
+        w.group.position.set(dx, 0, dz + 0.68); w.group.rotation.y = Math.PI; w.setAnim((r + c) % 4 === 0 ? 'type' : 'stretch'); if ((r + c) % 4) w.setFace('relief');
+        scene.add(w.group); chars.push(w);
+      }
+    }
+    const pr = makeProp('printer'); pr.set('jam'); pr.group.position.set(4.6, 0, -1.5); pr.group.rotation.y = -Math.PI / 2; scene.add(pr.group);
+    const pb = makeProp('paperBox'); pb.group.position.set(4.6, 0, -0.6); scene.add(pb.group);
+    const boss = makeCharacter({ preset: 'boss', seed: 5 }); boss.group.position.set(0.9, 0, -3.8); boss.setAnim('offer'); boss.setFace('smug');
+    boss.hold(makeProp('binderStack').group, { both: true }); scene.add(boss.group); chars.push(boss);
+    for (const x of [-5, 5]) { const p = makeProp('pillar'); p.group.position.set(x, 0, -6); scene.add(p.group); }
+    const wb = makeProp('whiteboard'); wb.group.position.set(-1, 0, -11); scene.add(wb.group);
+    const fs = makeProp('floorSign', { text: '7층' }); fs.group.position.set(5, 1.6, -5.69); scene.add(fs.group);
+    const cab = makeProp('cabinetTall'); cab.group.position.set(-5.5, 0, -1.5); cab.group.rotation.y = Math.PI / 2; scene.add(cab.group);
+    for (const [x, z] of [[-5.4, -4], [4.6, -4.5], [-0.8, -10.6]]) { const p = makeProp('plant'); p.group.position.set(x, 0, z); scene.add(p.group); }
+    const tc = makeProp('trashcan'); tc.group.position.set(2.8, 0, 0.2); scene.add(tc.group);
+    const flipped = makeProp('chair'); flipped.group.position.set(3.2, 0.3, 1.4); flipped.group.rotation.set(0.2, 0.6, 1.4); scene.add(flipped.group);
+    for (let i = 0; i < 5; i++) { const s = makeProp('paperSheet'); s.group.position.set(1.4 + i * 0.35, 0.002, 1.0 + (i % 2) * 0.4); s.group.rotation.y = i; scene.add(s.group); }
+    const sc = makeCharacter({ preset: 'workerM1', seed: 77 }); sc.group.position.set(-3.5, 0, 0.8); sc.group.rotation.y = 0.8; sc.setAnim('scared'); sc.setFace('scared'); scene.add(sc.group); chars.push(sc);
+    const fl = makeCharacter({ preset: 'workerF1', seed: 78 }); fl.group.position.set(-2.6, 0, -0.6); fl.group.rotation.y = -1.2; fl.setAnim('flee'); fl.setFace('shock'); scene.add(fl.group); chars.push(fl);
+    if (Q.has('rage')) { player.setAnim('rageIdle'); player.setFace('rage'); player._speed = 0; }
+    if (Q.has('tray')) { player.setAnim('carry'); player.hold(makeProp('coffeeTray').group, { both: true }); }
+    player.group.position.set(0, 0, 2.2);
+  }
+  scene.background = scene.background || new THREE.Color('#dfe5ec');
+  const behind = Q.has('front') ? -1 : 1;
+  const pp = player.group.position;
+  camera.position.set(pp.x + 0.2, 2.6, pp.z + 4.3 * behind);
+  controls.target.set(pp.x, 1.0, pp.z - 2 * behind);
+  camera.fov = 50; camera.updateProjectionMatrix(); controls.update();
+}
+
+sun.shadow.camera.left = -14; sun.shadow.camera.right = 14; sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
+sun.shadow.camera.far = 50; sun.shadow.camera.updateProjectionMatrix();
+
+// per-character tri count
+if (chars.length) {
+  let tris = 0; chars[0].group.traverse((m) => { if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3; });
+  infoExtra += (infoExtra ? '\n' : '') + 'char[0] tris ' + (tris | 0);
+}
+
+let T = 0;
+function step(dt) {
+  T += dt;
+  for (const u of updaters) u(dt, T);
+  for (const c of chars) c.update(dt, c._speed || 0);
+}
+if (fixedT != null) { const n = Math.round(fixedT * 60); for (let i = 0; i < n; i++) step(1 / 60); }
+else step(0.016);
+
+const info = document.getElementById('info');
+const clock = new THREE.Clock();
+let frames = 0;
+function loop() {
+  const dt = Math.min(0.05, clock.getDelta());
+  if (fixedT == null) step(dt);
+  renderer.render(scene, camera);
+  frames++;
+  if (frames % 10 === 1) info.textContent = `show=${show} t=${(fixedT ?? T).toFixed(2)}  calls ${renderer.info.render.calls} tris ${renderer.info.render.triangles}\n${infoExtra}`;
+  requestAnimationFrame(loop);
+}
+loop();
+window.__artReady = true;
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+</script>
+</body>
+</html>

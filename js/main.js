@@ -1,0 +1,1809 @@
+// 회사 뿌개기 — game core: loop, player, camera, story, rampage, bill, debug hook.
+import * as THREE from 'three';
+import { ui } from './ui.js';
+import { audio } from './audio.js';
+import { makeCharacter } from './art/chars.js';
+import { makeProp } from './art/props.js';
+import { createGfx } from './gfx.js';
+import { createFx } from './fx.js';
+import { buildFloor, disposeFloor, setFloorSky, FLOOR_INFO } from './level.js';
+import { createPhys, recUpright, syncRec } from './phys.js';
+import { collideCircle, NavGrid, pointInRect } from './nav.js';
+import { NPC } from './npc.js';
+import { instanceFloor } from './inst.js';
+
+const PI = Math.PI;
+const DEBUG = /debug/.test(location.hash);
+const TOUCH = ui.isTouch;
+const FIXED = 1 / 60;
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const rnd = (a, b) => a + Math.random() * (b - a);
+const fmt = (n) => Math.round(n).toLocaleString('ko-KR');
+function wrapA(a) { while (a > PI) a -= 2 * PI; while (a < -PI) a += 2 * PI; return a; }
+function angLerp(a, b, k) { return a + wrapA(b - a) * Math.min(1, k); }
+
+// ================================================================ state
+const G = {
+  mode: 'title', scene: 'title', phase: '', phaseT: 0, opts: { floor: 'office', gender: 'm' },
+  time: 0, rtime: 0, timeScale: 1, slowT: 0, slowScale: 1, hitStop: 0,
+  stress: 0, money: 0, items: new Map(), combo: 0, comboT: 0, special: 0,
+  timeLeft: null, rampage: false, canDamage: false, busy: false, paused: false, fast: false, manual: false,
+  counts: {}, taskPool: [], taskShown: [], obj: null, cand: null, focus: null, holdT: 0, needRelease: false,
+  evPanel: null, timers: [], transN: 0, gen: 0, errors: [], shake: 0, frames: 0, fps: 0, impacts: [],
+  floors: {}, S: null, floorKind: null, preset: 'day', queue: [], bestShown: 0,
+};
+const save = loadSave();
+function loadSave() {
+  try { const s = JSON.parse(localStorage.getItem('ppg.save') || 'null'); if (s && typeof s === 'object') return { best: Object.assign({}, s.best || {}), days: s.days | 0 }; } catch (e) { /* ignore */ }
+  return { best: {}, days: 0 };
+}
+function writeSave() { try { localStorage.setItem('ppg.save', JSON.stringify(save)); } catch (e) { /* ignore */ } }
+function report(e) {
+  if (G.errors.length < 60) G.errors.push(String((e && (e.stack || e.message)) || e).slice(0, 600));
+  console.error(e);
+}
+addEventListener('error', (e) => report(e.error || e.message));
+addEventListener('unhandledrejection', (e) => report(e.reason));
+
+// ================================================================ renderer
+const canvas = document.getElementById('cv');
+const gfx = createGfx(canvas, { touch: TOUCH, debug: DEBUG });
+const { scene, camera } = gfx;
+const fx = createFx(scene);
+
+// ================================================================ timers (unscaled game clock, step-safe)
+function after(sec, fn) { const t = { at: G.rtime + sec, fn, gen: G.gen }; G.timers.push(t); return t; }
+function runTimers() {
+  if (!G.timers.length) return;
+  const due = [];
+  G.timers = G.timers.filter((t) => { if (t.at <= G.rtime) { due.push(t); return false; } return true; });
+  for (const t of due) { if (t.gen !== G.gen) continue; try { t.fn(); } catch (e) { report(e); } }
+}
+
+// ================================================================ audio helpers
+function sfx(name, o) { audio.sfx(name, o); }
+function vibrate(ms) { try { if (TOUCH && ui.settings.vibe && navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) navigator.vibrate(ms); } catch (e) { /* ignore */ } }
+let audioReady = false;
+function initAudio() {
+  if (audioReady) return; audioReady = true;
+  audio.init();
+  audio.setEnabled({ sfx: !!ui.settings.sfx, bgm: !!ui.settings.bgm });
+}
+addEventListener('pointerdown', initAudio, { capture: true });
+addEventListener('keydown', initAudio, { capture: true });
+audio.setEnabled({ sfx: !!ui.settings.sfx, bgm: !!ui.settings.bgm });
+
+// ================================================================ input
+const keys = new Set();
+const IN = { attack: false, kick: false, interact: false, interactQ: 0, jumpQ: 0, specialQ: 0, attackQ: 0, kickQ: 0, lookDX: 0, lookDY: 0, drag: false, lastX: 0, lastY: 0, locked: false, wantLock: false, releasing: false, lockLostAt: -1e9 };
+const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'KeyJ', 'KeyK', 'KeyQ', 'KeyF', 'KeyZ', 'KeyX']);
+function playing() { return (G.mode !== 'title') && G.scene !== 'bill' && !G.paused; }
+addEventListener('keydown', (e) => {
+  if (e.target && e.target.closest && e.target.closest('input,textarea')) return;
+  const c = e.code;
+  if (c === 'Escape' || c === 'KeyP') {
+    // the Esc that just broke pointer lock already paused the game (if a browser also delivers it, ignore it)
+    if (c === 'Escape' && performance.now() - IN.lockLostAt < 400) return;
+    if (G.mode !== 'title' && G.scene !== 'bill') { if (!e.repeat) togglePause(!G.paused); e.preventDefault(); }
+    return;
+  }
+  if (!playing()) return;
+  // elevator panel: 1 / 7 pick the floor without the mouse
+  if (G.evPanel && !e.repeat && /^(Digit|Numpad)[17]$/.test(c)) { onElevator(c.endsWith('1') ? 'lobby' : 'office'); e.preventDefault(); return; }
+  if (GAME_KEYS.has(c)) {
+    if (c === 'Space' || c.startsWith('Arrow')) e.preventDefault();
+    if (e.repeat) return;
+    keys.add(c);
+    if (c === 'Space') IN.jumpQ++;
+    if (c === 'KeyQ') IN.specialQ++;
+    if (c === 'KeyJ' || c === 'KeyF' || c === 'KeyZ') { IN.attack = true; IN.attackQ++; }
+    if (c === 'KeyK' || c === 'KeyX') { IN.kick = true; IN.kickQ++; }
+    if (c === 'KeyE') { IN.interact = true; IN.interactQ++; G.needRelease = false; }
+  }
+});
+addEventListener('keyup', (e) => {
+  const c = e.code; keys.delete(c);
+  if (c === 'KeyJ' || c === 'KeyF' || c === 'KeyZ') IN.attack = keys.has('KeyJ') || keys.has('KeyF') || keys.has('KeyZ');
+  if (c === 'KeyK' || c === 'KeyX') IN.kick = keys.has('KeyK') || keys.has('KeyX');
+  if (c === 'KeyE') { IN.interact = false; G.needRelease = false; }
+});
+function clearInput() { keys.clear(); IN.attack = IN.kick = IN.interact = false; IN.drag = false; IN.attackQ = IN.kickQ = IN.jumpQ = IN.specialQ = IN.interactQ = 0; G.needRelease = false; }
+addEventListener('blur', clearInput);
+// tab hidden: drop held keys (their keyup never arrives) and pause a running game
+document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); if (playing() && !G.manual) togglePause(true); } });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch' || TOUCH) return;
+  if (!playing()) return;
+  IN.drag = true; IN.lastX = e.clientX; IN.lastY = e.clientY; IN.dragMoved = 0;
+  if (e.button === 0) { IN.attack = true; IN.attackQ++; }
+  if (e.button === 2) { IN.kick = true; IN.kickQ++; }
+  if (!IN.locked && canvas.requestPointerLock && !DEBUG) {
+    try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* optional */ }
+  }
+});
+addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch' || TOUCH) return;
+  if (IN.locked) { IN.lookDX += e.movementX || 0; IN.lookDY += e.movementY || 0; return; }
+  if (!IN.drag) return;
+  IN.lookDX += e.clientX - IN.lastX; IN.lookDY += e.clientY - IN.lastY;
+  IN.lastX = e.clientX; IN.lastY = e.clientY;
+});
+addEventListener('pointerup', (e) => {
+  if (e.pointerType === 'touch' || TOUCH) return;
+  IN.drag = false;
+  if (e.button === 0) IN.attack = false;
+  if (e.button === 2) IN.kick = false;
+});
+document.addEventListener('pointerlockchange', () => {
+  const was = IN.locked;
+  IN.locked = document.pointerLockElement === canvas;
+  if (was && !IN.locked && !IN.releasing && playing()) { togglePause(true); IN.lockLostAt = performance.now(); }
+  IN.releasing = false;
+});
+function releaseLock() { if (document.pointerLockElement) { IN.releasing = true; try { document.exitPointerLock(); } catch (e) { /* ignore */ } } }
+function onAction(name, down) {
+  if (!playing()) return;
+  if (name === 'attack') { IN.attack = down; if (down) IN.attackQ++; }
+  else if (name === 'interact') { IN.interact = down; if (down) IN.interactQ++; G.needRelease = false; }
+  else if (name === 'jump') { if (down) IN.jumpQ++; }
+  else if (name === 'special') { if (down) IN.specialQ++; }
+}
+function moveInput() {
+  let x = 0, y = 0;
+  if (keys.has('KeyW') || keys.has('ArrowUp')) y += 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) y -= 1;
+  if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+  if (TOUCH) { x += ui.joy.x; y += ui.joy.y; }
+  const m = Math.hypot(x, y);
+  if (m > 1) { x /= m; y /= m; }
+  return [x, y];
+}
+
+// ================================================================ player
+const P = {
+  char: null, pos: V(), y: 0, vy: 0, yaw: 0, vel: V(), onGround: true, speed: 0, seated: null, carry: null, carryKind: null, held: null,
+  controls: true, rage: false, attackT: 0, swing: 0, faceT: 0, face: 'normal', stepD: 0, push: null, prev: V(), r: 0.3,
+};
+function makePlayerChar(gender) {
+  const c = makeCharacter({ preset: gender === 'f' ? 'playerF' : 'player', seed: 1 });
+  return c;
+}
+function setPlayerChar(gender) {
+  const old = P.char;
+  const c = makePlayerChar(gender);
+  if (old) {
+    c.setAnim(old.anim); c.setFace(old.face);
+    if (old.group.parent) old.group.parent.add(c.group);
+    // move carried things
+    for (const a of ['chest', 'handR']) while (old[a].children.length) { const o = old[a].children[old[a].children.length - 1]; if (o.isMesh) break; old[a].remove(o); c[a].add(o); }
+    old.dispose();
+  }
+  P.char = c;
+  placePlayer();
+}
+function placePlayer() {
+  const g = P.char.group;
+  g.position.set(P.pos.x, P.y, P.pos.z);
+  g.rotation.y = P.yaw;
+}
+function setFace(name, sec = 0) { P.char.setFace(name); if (sec > 0) P.faceT = sec; else P.faceT = 0; }
+function baseFace() { return P.rage ? 'rage' : G.stress >= 60 ? 'endure' : 'normal'; }
+
+function seatPlayer(seat) {
+  P.seated = seat; P.pos.set(seat.x, 0, seat.z); P.yaw = seat.rotY; P.y = 0; P.vel.set(0, 0, 0);
+  P.char.setAnim('type');
+  const ch = seat.chair && seat.chair.rec;
+  if (ch && !ch.removed) {
+    ch.solid = true;
+    const fx = Math.sin(seat.rotY), fz = Math.cos(seat.rotY);
+    ch.body.position.set(seat.x + fx * 0.08, ch.hy, seat.z + fz * 0.08);
+    ch.body.quaternion.setFromEuler(0, seat.rotY, 0);
+    ch.body.velocity.set(0, 0, 0); ch.body.angularVelocity.set(0, 0, 0); ch.body.sleep();
+    syncRec(ch);
+  }
+  placePlayer();
+}
+function unseat() {
+  if (!P.seated) return;
+  const s = P.seated; P.seated = null;
+  P.pos.x -= Math.sin(P.yaw) * 0.62; P.pos.z -= Math.cos(P.yaw) * 0.62;
+  if (s.chair && s.chair.rec) s.chair.rec.solid = false;
+  P.char.setAnim('idle');
+  placePlayer();
+}
+function dropCarry() {
+  if (!P.carry) return null;
+  const o = P.carry; if (o.parent) o.parent.remove(o);
+  P.carry = null; P.carryKind = null;
+  return o;
+}
+function resetPlayer() {
+  dropCarry();
+  if (P.held) { const r = P.held; P.held = null; if (r.group.parent) r.group.parent.remove(r.group); r.removed = true; }
+  P.seated = null; P.vel.set(0, 0, 0); P.vy = 0; P.y = 0; P.onGround = true; P.controls = true; P.rage = false; P.attackT = 0; P.push = null;
+  P.char.setAnim('idle'); setFace('normal');
+  P.char.group.rotation.x = 0;
+}
+
+// ================================================================ floors
+const SMALL_CAST = new Set(['keyboard', 'binders', 'phone', 'calendar', 'penCup', 'plantSmall', 'mug', 'paperStack', 'mouse', 'laptop', 'icedCoffee', 'hotCoffee', 'cupStack']);
+function getFloor(kind) {
+  if (G.floors[kind]) return G.floors[kind];
+  const t0 = performance.now();
+  const F = buildFloor(kind, { low: TOUCH });
+  const phys = createPhys(F);
+  F.instanced = instanceFloor(F, phys).meshes;
+  // phones: the batched desk clutter does not cast shadows (barely visible, saves shadow-pass draws)
+  if (TOUCH) for (const o of F.group.children) if (o.isInstancedMesh && SMALL_CAST.has(o.name.slice(5))) o.castShadow = false;
+  const S = { kind, F, phys, npcs: [], walkers: [], nav: null, obst: [], lists: null, navT: 0, touched: false, used: G.mode !== 'title', buildMs: 0, ropes: [] };
+  S.lists = [F.rects, S.obst];
+  for (const sp of F.npcs) { const n = new NPC(sp); S.npcs.push(n); F.group.add(n.group); }
+  for (const w of F.walkers) {
+    const n = new NPC({ preset: w.preset, x: w.x, z: w.z, rotY: PI / 2, anim: 'walk', role: 'walker', variantSeed: w.variantSeed, id: kind + ':w' + S.walkers.length, speed: w.speed, x0: w.x0, x1: w.x1 });
+    n.state = 'stroll'; n.dir = w.dir; n.char.setAnim('walk');
+    S.walkers.push(n); F.group.add(n.group);
+  }
+  // café queue ropes (hidden once a post moves)
+  const rm = new THREE.MeshStandardMaterial({ color: '#28336a', roughness: 0.6 });
+  for (const rp of F.ropes) {
+    const a = rp.a.rec, b = rp.b.rec;
+    const pa = V(a.body.position.x, 0.9, a.body.position.z), pb = V(b.body.position.x, 0.9, b.body.position.z);
+    const len = pa.distanceTo(pb);
+    const geo = new THREE.CylinderGeometry(0.014, 0.014, len, 6); geo.rotateZ(PI / 2);
+    const m = new THREE.Mesh(geo, rm); m.position.copy(pa).add(pb).multiplyScalar(0.5); m.position.y -= 0.04;
+    m.rotation.y = -Math.atan2(pb.z - pa.z, pb.x - pa.x);
+    m.castShadow = true; F.group.add(m); F.disposables.push(geo);
+    S.ropes.push({ m, a, b, ax: pa.x, az: pa.z, bx: pb.x, bz: pb.z });
+  }
+  // walkable zones for the nav grid: elevator cabins
+  S.zones = F.elevators.map((ev) => { const r = Math.atan2(ev.fwd.x, ev.fwd.z); return { x: ev.cabin.x, z: ev.cabin.z, hx: 0.45, hz: 0.85, rot: r, c: Math.cos(r), s: Math.sin(r) }; });
+  S.nav = new NavGrid(F.bounds);
+  S.staticRects = F.rects.filter((r) => !r.active);
+  rebuildNav(S);
+  S.buildMs = Math.round(performance.now() - t0);
+  G.floors[kind] = S;
+  return S;
+}
+function rebuildNav(S) {
+  S.phys.obstacles(S.obst);
+  S.nav.build([S.staticRects, S.obst], S.zones);
+}
+function disposeFloors() {
+  for (const k of Object.keys(G.floors)) {
+    const S = G.floors[k];
+    for (const n of [...S.npcs, ...S.walkers]) { ui.bubble(n.id, null); n.dispose(); }
+    disposeFloor(S.F);
+  }
+  G.floors = {}; G.S = null; G.floorKind = null;
+}
+function enterFloor(kind, { at = null, yaw = null, elevator = null } = {}) {
+  const S = getFloor(kind);
+  if (G.S && G.S !== S) {
+    scene.remove(G.S.F.group);
+    for (const n of [...G.S.npcs, ...G.S.walkers]) ui.bubble(n.id, null);
+  }
+  gfx.clearHighlight();
+  G.S = S; G.floorKind = kind;
+  if (!S.F.group.parent) scene.add(S.F.group);
+  if (P.char.group.parent !== S.F.group) S.F.group.add(P.char.group);
+  S.phys.onImpact = onImpact;
+  gfx.fit(S.F.bounds, S.F.ceilY);
+  applyTime(G.preset);
+  if (elevator != null) {
+    const ev = S.F.elevators[elevator] || S.F.elevators[0];
+    // step out of the car: stand just outside the opening doors, facing the room
+    P.pos.copy(ev.front).addScaledVector(ev.fwd, 0.55);
+    P.yaw = Math.atan2(ev.fwd.x, ev.fwd.z);
+    ev.open = 0.35; ev.hold = 1.6; ev.dismissed = true;
+    after(0.1, () => sfx('ding', { vol: 0.6 }));
+  } else if (at) { P.pos.set(at.x, 0, at.z); if (yaw != null) P.yaw = yaw; }
+  P.y = 0; P.vy = 0; P.onGround = true; P.vel.set(0, 0, 0);
+  placePlayer();
+  snapCamera();
+  if (elevator != null) { CAM.yaw = P.yaw + 0.85; updateCamera(0, true); }
+  return S;
+}
+function applyTime(name) {
+  G.preset = name;
+  gfx.applyPreset(G.floorKind === 'lobby' && name !== 'sunset' ? 'lobby' : name);
+  if (G.S) setFloorSky(G.S.F, gfx.PRESETS ? name : name);
+}
+
+// ================================================================ camera
+const CAM = { yaw: PI, pitch: 0.3, dist: 3.7, tgt: V(), pos: V(), lastLook: -99, mode: 'follow', drift: 0, occ: 1 };
+function camDist() { const portrait = innerWidth < innerHeight; return (portrait ? 4.9 : 3.75) + (G.S && G.S.kind === 'lobby' ? 0.25 : 0); }
+function snapCamera() {
+  CAM.yaw = P.yaw; CAM.pitch = innerWidth < innerHeight ? 0.44 : 0.3;
+  CAM.tgt.set(P.pos.x, 1.25, P.pos.z);
+  updateCamera(0, true);
+}
+const _cv = V(), _cl = V();
+function updateCamera(dt, snap = false) {
+  const portrait = innerWidth < innerHeight;
+  const fov = portrait ? 70 : 55;
+  if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  if (G.mode === 'title' && G.S) {
+    const tc = G.S.F.anchors.titleCam;
+    CAM.drift += dt;
+    const a = Math.sin(CAM.drift * 0.12) * 0.35;
+    const off = V().subVectors(tc.pos, tc.look);
+    off.applyAxisAngle(V(0, 1, 0), a);
+    camera.position.copy(tc.look).add(off);
+    if (portrait) camera.position.addScaledVector(off, 0.35);
+    camera.lookAt(tc.look);
+    return;
+  }
+  // look input
+  let dx = IN.lookDX, dy = IN.lookDY; IN.lookDX = 0; IN.lookDY = 0;
+  if (TOUCH) { dx += ui.look.dx * 1.6; dy += ui.look.dy * 1.6; ui.look.dx = 0; ui.look.dy = 0; }
+  if (dx || dy) {
+    CAM.yaw -= dx * 0.0042; CAM.pitch = clamp(CAM.pitch + dy * 0.0032, -0.05, 1.05);
+    CAM.lastLook = G.rtime;
+  }
+  // gentle auto-follow behind the player when the mouse is idle
+  if (!snap && G.rtime - CAM.lastLook > 1.3 && P.speed > 0.6 && !P.seated) {
+    const d = wrapA(P.yaw - CAM.yaw);
+    if (Math.abs(d) < 2.3) CAM.yaw += d * Math.min(1, dt * 1.5);
+  }
+  if (P.seated && !snap && G.rtime - CAM.lastLook > 1.3) CAM.yaw = angLerp(CAM.yaw, P.yaw, dt * 2);
+  const dist = camDist();
+  const ty = P.seated ? 1.05 : 1.25 + P.y * 0.5;
+  _cv.set(P.pos.x, ty, P.pos.z);
+  if (snap) CAM.tgt.copy(_cv); else CAM.tgt.lerp(_cv, Math.min(1, dt * 12));
+  const fx = Math.sin(CAM.yaw), fz = Math.cos(CAM.yaw);
+  const cp = Math.cos(CAM.pitch), spch = Math.sin(CAM.pitch);
+  const pos = _cl.set(CAM.tgt.x - fx * dist * cp, CAM.tgt.y + dist * spch, CAM.tgt.z - fz * dist * cp);
+  // keep inside the room (and out of pillars / walls)
+  const F = G.S && G.S.F;
+  if (F) {
+    const b = F.bounds, inside = P.pos.x > b.minX && P.pos.x < b.maxX;
+    if (inside) { pos.x = clamp(pos.x, b.minX + 0.25, b.maxX - 0.25); pos.z = clamp(pos.z, b.minZ + 0.25, b.maxZ - 0.25); }
+    pos.y = clamp(pos.y, 0.35, F.ceilY - 0.22);
+    // pillars / walls between the player and the camera: pull the camera in front of them
+    // (skipped inside an elevator cabin; the first ~0.6 m behind the player is ignored so a wall the
+    //  player hugs does not shove the camera into their head)
+    let ok = 1;
+    const N = 12, rects = G.S.staticRects;
+    if (inside) {
+      ok = 2 / N;
+      for (let i = 3; i <= N; i++) {
+        const t = i / N;
+        const x = CAM.tgt.x + (pos.x - CAM.tgt.x) * t, y = CAM.tgt.y + (pos.y - CAM.tgt.y) * t, z = CAM.tgt.z + (pos.z - CAM.tgt.z) * t;
+        let hit = false;
+        for (let k = 0; k < rects.length; k++) { const r = rects[k]; if (r.y1 > y - 0.05 && pointInRect(r, x, z, 0.14)) { hit = true; break; } }
+        if (hit) break;
+        ok = t;
+      }
+    }
+    const want = ok >= 1 ? 1 : Math.max(0.2, ok - 0.03);
+    if (snap || want < CAM.occ) CAM.occ = want; else CAM.occ += (want - CAM.occ) * Math.min(1, dt * 4);
+    if (CAM.occ < 0.999) pos.lerpVectors(CAM.tgt, pos, CAM.occ);
+    // pulled in close (pillar / wall behind): rise above head height so the player's head does not fill the screen
+    const close = Math.hypot(pos.x - CAM.tgt.x, pos.z - CAM.tgt.z);
+    if (close < 1.7) pos.y = Math.min(F.ceilY - 0.22, Math.max(pos.y, CAM.tgt.y + (1.7 - close) * 0.55));
+  }
+  CAM.pos.copy(pos);
+  camera.position.copy(pos);
+  if (G.shake > 0.001) {
+    const s = G.shake * (ui.settings.calm ? 0.3 : 1);
+    camera.position.x += rnd(-1, 1) * s * 0.12; camera.position.y += rnd(-1, 1) * s * 0.1; camera.position.z += rnd(-1, 1) * s * 0.12;
+  }
+  camera.lookAt(CAM.tgt.x + fx * 1.1, CAM.tgt.y - 0.12, CAM.tgt.z + fz * 1.1);
+}
+
+// ================================================================ HUD helpers
+function hudStory() {
+  ui.hud(true);
+  ui.keys([{ k: 'WASD', t: '이동' }, { k: 'SPACE', t: '점프' }, { k: 'E', t: '행동' }]);
+  ui.money(0, '피해액'); ui.timer(null); ui.combo(0);
+}
+function hudRampage(label = '피해 총액') {
+  ui.hud(true);
+  ui.keys([{ k: 'WASD', t: '이동' }, { k: 'SPACE', t: '점프' }, { k: 'Z·클릭', t: '때리기' }, { k: 'X', t: '발차기' }, { k: 'E', t: '엎기·집기' }, { k: 'Q', t: '필살기' }]);
+  ui.money(G.money, label); ui.special(G.special);
+}
+function setStress(v, pulse = true) {
+  const nv = clamp(v, 0, 100);
+  const up = nv > G.stress + 0.5;
+  G.stress = nv;
+  ui.stress(nv, { pulse: pulse && up });
+  audio.intensity(nv / 100);
+  if (up && !G.rampage) sfx('stressUp', { vol: 0.5 });
+}
+function addStress(d) { setStress(G.stress + d); }
+function setTasks(list) { G.storyTasks = list; ui.tasks(list); }
+function doneTask(i) { if (G.storyTasks && G.storyTasks[i]) { G.storyTasks[i].done = true; ui.tasks(G.storyTasks); sfx('check', { vol: 0.6 }); } }
+
+// ================================================================ projection
+const _pv = V();
+function toScreen(v) {
+  _pv.copy(v).project(camera);
+  if (_pv.z > 1 || _pv.z < -1 || _pv.x < -1.3 || _pv.x > 1.3 || _pv.y < -1.3 || _pv.y > 1.3) return null;
+  return { x: (_pv.x * 0.5 + 0.5) * innerWidth, y: (-_pv.y * 0.5 + 0.5) * innerHeight };
+}
+
+// ================================================================ story scenes
+const STORY_ORDER = ['copier', 'coffee', 'sunset', 'rampage', 'bill'];
+const STORY = {
+  copier: {
+    info: { time: '오전 10:30', title: '복합기 용지 걸림', sub: '급한 인쇄 한 장이 안 나온다' },
+    setup() {
+      G.preset = 'day';
+      const S = enterFloor('office', { at: G.floors.office ? null : null });
+      resetPlayer();
+      seatPlayer(S.F.anchors.playerSeat);
+      snapCamera(); CAM.pitch = 0.36;
+      audio.music('office');
+      setStress(12, false);
+      hudStory();
+      ui.mission({ title: '복합기 용지 걸림', sub: '7층 · 오전 10:30', note: '급한 인쇄 한 장이 안 나온다' });
+      setTasks([{ text: '용지 걸림 확인' }]);
+      S.F.anchors.printer.prop.set('jam');
+      G.jams = 0;
+      phase('intro');
+      after(0.6, () => { ui.subtitle('부장', '김 대리~ 회의 자료 한 장만 급하게 뽑아 와!', 3200); sfx('mumbleLow', { vol: 0.6 }); bossLook(); });
+      after(1.8, () => sfx('printerJam', { vol: 0.5 }));
+      after(3.0, () => { unseat(); phase('walk'); ui.toast('복합기로 가 보세요', 1800); });
+    },
+    update() {
+      const S = G.S, pr = S.F.anchors.printer.rec;
+      if (G.phase === 'walk' && G.floorKind === 'office') {
+        const front = V(pr.body.position.x, 0, pr.body.position.z - 0.85);
+        objective({ pos: front, h: 1.65, cand: { id: 'printer', pos: V(pr.body.position.x, 0, pr.body.position.z), h: 1.05, obj: pr.group, text: '용지 빼기', hold: 1.0, range: 1.6, onDone: pullPaper } });
+      } else objective(null);
+    },
+    skip() { G.jams = 3; sceneNext(); },
+  },
+  coffee: {
+    info: { time: '낮 12:10', title: '커피 심부름', sub: '“아아 12잔, 자네 카드로”' },
+    setup() {
+      G.preset = 'noon';
+      const S = enterFloor('office');
+      resetPlayer();
+      const A = S.F.anchors;
+      P.pos.copy(A.bossFront); P.yaw = PI / 2; placePlayer(); snapCamera();
+      const boss = npcByRole(S, 'boss');
+      resetNpc(boss, A.bossStand, A.bossStandYaw, 'talk', 'smug');
+      audio.music('office');
+      setStress(Math.max(G.stress, 42), false);
+      hudStory();
+      ui.mission({ title: '커피 심부름', sub: '7층 · 낮 12:10', quote: '아아 12잔, 자네 카드로' });
+      setTasks([{ text: '1층 카페 가기' }, { text: '아이스 아메리카노 받기' }, { text: '부장님께 갖다 드리기' }]);
+      phase('order');
+      P.controls = false;
+      after(0.4, () => { boss.say('아아 12잔, 자네 카드로~', 3.4, G.rtime); sfx('mumbleLow', { vol: 0.6 }); });
+      after(3.6, () => { addStress(4); setFace('endure', 1.2); boss.char.setAnim('idle'); P.controls = true; phase('toLobby'); ui.toast('엘리베이터를 타고 1층으로', 2000); });
+    },
+    update() {
+      const S = G.S;
+      const ph = G.phase;
+      if (ph === 'toLobby') {
+        if (G.floorKind === 'lobby') { lobbyArrived(); return; }
+        objective(elevatorObjective('lobby'));
+      } else if (ph === 'queue') {
+        if (G.floorKind !== 'lobby') { objective(elevatorObjective('lobby')); return; }
+        const spot = queueSpot();
+        objective({ pos: spot, h: 2.2, floor: 'lobby' });
+        if (P.pos.distanceTo(spot) < 0.75) startQueue();
+      } else if (ph === 'inQueue') {
+        if (G.floorKind !== 'lobby') { objective(elevatorObjective('lobby')); return; }
+        objective({ pos: queueSpot(), h: 2.2, floor: 'lobby' });
+      } else if (ph === 'pickup') {
+        if (G.floorKind !== 'lobby') { objective(elevatorObjective('lobby')); return; }
+        const t = S.F.anchors.trays[0].rec;
+        const tp = V(t.body.position.x + 0.2, 0, t.body.position.z);
+        objective({ pos: V(tp.x, 0, -5.45), h: 1.75, floor: 'lobby', cand: { id: 'trays', pos: tp, h: 1.25, obj: t.group, text: '커피 받기', hold: 0.6, range: 1.7, onDone: takeCoffee } });
+      } else if (ph === 'toOffice') {
+        if (G.floorKind === 'office') { phase('deliver'); audio.music('office'); ui.mission({ title: '커피 심부름', sub: '7층 · 낮 12:40', quote: '아아 12잔, 자네 카드로' }); return; }
+        objective(elevatorObjective('office'));
+      } else if (ph === 'deliver') {
+        if (G.floorKind !== 'office') { objective(elevatorObjective('office')); return; }
+        const boss = npcByRole(G.floors.office, 'boss');
+        objective({ pos: boss.pos.clone(), h: 2.45, floor: 'office', cand: { id: 'boss', pos: boss.pos, h: 1.3, obj: boss.group, text: '커피 드리기', hold: 0.4, range: 2.0, onDone: deliverCoffee } });
+      } else objective(null);
+    },
+    skip() { sceneNext(); },
+  },
+  sunset: {
+    info: { time: '오후 5:50', title: '퇴근 5분 전', sub: '오늘은 정시에 간다' },
+    setup() {
+      G.preset = 'sunset';
+      const S = enterFloor('office');
+      resetPlayer();
+      const seat = S.F.anchors.playerSeat;
+      P.pos.set(seat.x - 0.9, 0, seat.z + 0.7); P.yaw = -PI / 2; placePlayer(); snapCamera();
+      const boss = npcByRole(S, 'boss');
+      resetNpc(boss, S.F.anchors.hide[0], PI / 2, 'idle', 'smug');
+      boss.say('', 0);
+      audio.music('sunset');
+      setStress(Math.max(G.stress, 70), false);
+      hudStory();
+      ui.mission({ title: '퇴근 5분 전', sub: '7층 · 오후 5:50' });
+      setTasks([{ text: '퇴근하기' }]);
+      phase('leave');
+      for (const ev of S.F.elevators) ev.locked = false;
+    },
+    update() {
+      const S = G.S;
+      const boss = npcByRole(S, 'boss');
+      if (G.phase === 'leave') {
+        objective(elevatorObjective(null));
+        const ev = S.F.elevators[0];
+        if (P.pos.x < -4.0 || P.pos.distanceTo(ev.front) < 7.5) interceptStart(boss);
+      } else if (G.phase === 'intercept') {
+        // keep standing in the way between the player and the elevators
+        if (G.rtime - (G.bossRepath || 0) > 0.6 && boss.state !== 'walk') {
+          const ev = nearestElevator(P.pos);
+          const d = V().subVectors(ev.front, P.pos).setY(0);
+          if (d.length() > 0.1) d.normalize();
+          const want = P.pos.clone().addScaledVector(d, 1.35);
+          if (want.distanceTo(boss.pos) > 0.9) { boss.walkTo(npcCtx(), want.x, want.z, { speed: 2.4, anim: 'offer' }); boss.arriveAnim = 'offer'; }
+          G.bossRepath = G.rtime;
+        }
+        if (boss.state !== 'walk') boss.yaw = angLerp(boss.yaw, Math.atan2(P.pos.x - boss.pos.x, P.pos.z - boss.pos.z), 0.2);
+        if (G.rtime - (G.bossSaid || 0) > 4.5) { boss.say('이것만 하고 가~', 3, G.rtime); G.bossSaid = G.rtime; }
+        objective({ pos: boss.pos.clone(), h: 2.5, cand: { id: 'boss', pos: boss.pos, h: 1.25, obj: boss.group, text: '서류 받기', hold: 0.5, range: 2.1, onDone: takeBinders } });
+      } else objective(null);
+    },
+    skip() { G.phase = 'boil'; startRage(); },
+  },
+};
+function phase(p) { G.phase = p; G.phaseT = 0; }
+function sceneNext() {
+  const i = STORY_ORDER.indexOf(G.scene);
+  gotoScene(STORY_ORDER[Math.min(STORY_ORDER.length - 1, i + 1)]);
+}
+function gotoScene(id) {
+  G.gen++; G.timers.length = 0;
+  ui.subtitle(null, null); ui.elevator(null); G.evPanel = null;
+  if (STORY[id]) {
+    G.scene = id; G.rampage = false; G.canDamage = false; G.timeLeft = null;
+    objective(null);
+    return transition(STORY[id].info, () => STORY[id].setup());
+  }
+  if (id === 'rampage') {
+    if (!G.S) { G.preset = 'sunset'; enterFloor('office'); }
+    startRampage();
+    return Promise.resolve();
+  }
+  if (id === 'bill') { showBill(); return Promise.resolve(); }
+  return Promise.resolve();
+}
+async function transition(info, setup, ms = 2100) {
+  G.busy = true;
+  const my = ++G.transN;
+  try {
+    if (!G.fast) await ui.fade(info, ms);
+    if (my !== G.transN) return;
+    setup();
+    G.busy = true; // setup may have cleared it (startRampage); keep play frozen until the card is gone
+    renderNow();
+    if (!G.fast) await ui.fadeOut();
+    else ui.fade && null;
+  } catch (e) { report(e); }
+  if (my === G.transN) G.busy = false;
+}
+function npcByRole(S, role) { return S.npcs.find((n) => n.role === role); }
+function resetNpc(n, pos, yaw, anim, face) {
+  n.gone = false; n.group.visible = true; n.panicked = false; n.path = null; n.onArrive = null;
+  n.seated = false; n.state = 'idle'; n.t = 0; n.y = 0;
+  n.pos.set(pos.x, 0, pos.z); n.yaw = yaw; n.char.setAnim(anim); n.char.setFace(face); n.bubble = null; n.char.group.rotation.x = 0;
+  for (let i = n.char.chest.children.length - 1; i >= 0; i--) n.char.chest.remove(n.char.chest.children[i]);
+  n.place();
+}
+function bossLook() { const b = G.S && npcByRole(G.S, 'boss'); if (b) b.char.setAnim('talk'); after(3, () => b && b.state === 'idle' && b.char.setAnim('idle')); }
+
+// ---- copier
+function pullPaper() {
+  const S = G.S, pr = S.F.anchors.printer;
+  P.char.playOnce('pull');
+  pr.prop.set('ok');
+  sfx('paper', { vol: 0.7 });
+  G.jams++;
+  phase('pulled');
+  const pp = V(pr.rec.body.position.x, 0.45, pr.rec.body.position.z - 0.45);
+  const ball = makeProp('paperBall', { seed: G.jams }).group;
+  fx.toss(ball, pp, V(rnd(-0.6, 0.6), 2.4, -1.6), 8, S.F.group);
+  const stressSteps = [22, 32, 37];
+  setStress(stressSteps[Math.min(2, G.jams - 1)]);
+  setFace('endure', 1.6);
+  vibrate(30);
+  if (G.jams < 3) {
+    after(1.2, () => {
+      pr.prop.set('jam'); sfx('printerJam', { vol: 0.7 });
+      ui.subtitle('나', ['…또 걸렸네?', '아니 왜 또…!'][G.jams - 1], 1900);
+      phase('walk');
+    });
+  } else {
+    after(0.9, () => sfx('printerWhirr', { vol: 0.7 }));
+    after(2.0, () => { sfx('printerBeep', { vol: 0.7 }); fx.papers(V(pp.x, 0.6, pp.z), 1, 0.8); ui.subtitle('나', '…드디어 나왔다', 1800); doneTask(0); });
+    after(4.0, () => { ui.subtitle('부장', '아 그거 이제 필요 없어~ 회의 끝났거든', 2800); sfx('mumbleLow', { vol: 0.6 }); bossLook(); });
+    after(5.6, () => { setStress(42); setFace('endure', 2.5); });
+    after(7.6, () => sceneNext());
+  }
+}
+// ---- coffee
+function lobbyArrived() {
+  doneTask(0);
+  phase('queue');
+  audio.music('lobby');
+  ui.mission({ title: '커피 심부름', sub: '1층 · 낮 12:10', quote: '아아 12잔, 자네 카드로' });
+  const S = G.S;
+  G.queue = S.npcs.filter((n) => n.role === 'queue' && !n.gone).sort((a, b) => a.spec.queueIndex - b.spec.queueIndex);
+}
+function queueSpot() { const A = G.floors.lobby.F.anchors; return A.queue[Math.min(4, G.queue.length)]; }
+function startQueue() {
+  phase('inQueue');
+  const S = G.S, A = S.F.anchors;
+  const cutter = npcByRole(S, 'cutter');
+  after(1.0, () => {
+    if (!cutter || cutter.gone) return;
+    const spot = A.queue[G.queue.length];
+    cutter.walkTo(npcCtx(), spot.x, spot.z, { speed: 2.3, anim: 'phone', onArrive: () => { cutter.yaw = PI; cutter.char.setAnim('phone'); } });
+    G.queue.push(cutter);
+    after(1.1, () => {
+      cutter.say('아, 저 하나만 빨리요~', 2.6, G.rtime); sfx('mumble', { vol: 0.6 });
+      P.push = A.queue[Math.min(4, G.queue.length)].clone();
+      addStress(8); setFace('endure', 1.8);
+      after(1.0, () => ui.subtitle('나', '(…새치기?)', 1700));
+    });
+  });
+  const serve = () => {
+    if (G.phase !== 'inQueue') return;
+    const front = G.queue.shift();
+    if (!front) { phase('pickup'); return; }
+    const bar = npcByRole(S, 'barista');
+    if (bar) { bar.say('주문하신 아메리카노 나왔습니다~', 1.6, G.rtime); bar.char.playOnce('take'); }
+    sfx('cupClink', { vol: 0.5 });
+    const door = A.door;
+    front.walkTo(npcCtx(), door.x, door.z, { speed: 1.6, anim: front.baseAnim === 'lookUp' ? 'walk' : front.baseAnim, onArrive: () => front.arriveExit(npcCtx(), { leave: true, dir: V(0, 0, 1) }) });
+    G.queue.forEach((n, i) => {
+      const s = A.queue[i];
+      after(0.25 + i * 0.15, () => n.walkTo(npcCtx(), s.x, s.z, { speed: 1.2, anim: n.baseAnim === 'lookUp' ? 'walk' : n.baseAnim, onArrive: () => { n.yaw = PI; n.char.setAnim(n.baseAnim); } }));
+    });
+    if (G.queue.length === 0) after(1.4, () => { phase('pickup'); ui.toast('내 차례!', 1400); });
+    else after(1.9, serve);
+  };
+  after(3.4, serve);
+}
+function takeCoffee() {
+  const S = G.S;
+  const trays = S.F.anchors.trays.map((sp) => sp.rec).filter((r) => r && !r.removed);
+  const carry = new THREE.Group();
+  trays.forEach((r, i) => {
+    S.phys.detach(r);
+    r.group.matrixAutoUpdate = true;
+    r.group.position.set(i ? 0.19 : -0.19, -0.02, 0.02); r.group.rotation.set(0, 0, 0); r.group.quaternion.identity();
+    carry.add(r.group);
+  });
+  P.char.hold(carry, { both: true });
+  P.carry = carry; P.carryKind = 'coffee'; G.coffeeRecs = trays;
+  P.char.playOnce('take');
+  sfx('register', { vol: 0.6 }); after(0.3, () => sfx('pickup', { vol: 0.6 }));
+  const bar = npcByRole(S, 'barista');
+  if (bar) bar.say('12잔 맞으시죠? 카드 꽂아 주세요~', 2.6, G.rtime);
+  after(1.4, () => { ui.subtitle('나', '(…내 카드로)', 1800); addStress(4); setFace('endure', 1.5); });
+  doneTask(1);
+  phase('toOffice');
+}
+function deliverCoffee() {
+  const S = G.S;
+  const boss = npcByRole(S, 'boss');
+  phase('delivered');
+  // put the trays on the boss desk
+  const o = dropCarry();
+  const desk = S.F.anchors.bossSeat.desk.rec;
+  (G.coffeeRecs || []).forEach((r, i) => {
+    if (o) o.remove(r.group);
+    S.F.group.add(r.group); r.group.matrixAutoUpdate = false;
+    S.phys.reattach(r, V(desk.body.position.x - 0.1, 0.77 + r.hy, desk.body.position.z - 0.35 + i * 0.4));
+    r.body.sleep(); syncRec(r);
+  });
+  P.char.playOnce('take');
+  boss.char.setAnim('talk');
+  after(0.3, () => { boss.say('어? 나 오늘 따뜻한 라떼 마시기로 했는데?', 2.6, G.rtime); sfx('mumbleLow', { vol: 0.6 }); });
+  after(3.1, () => { boss.say('…영수증은?', 2.2, G.rtime); sfx('mumbleLow', { vol: 0.6, pitch: 1.1 }); });
+  after(3.6, () => { setStress(70); setFace('endure', 3); vibrate(40); doneTask(2); boss.char.setAnim('idle'); });
+  after(6.2, () => sceneNext());
+}
+// ---- sunset
+function interceptStart(boss) {
+  phase('intercept');
+  setTasks([{ text: '추가 업무 받기' }]);
+  for (const ev of G.S.F.elevators) ev.locked = true;
+  const stack = makeProp('binderStack', { seed: 4 });
+  boss.char.hold(stack.group, { both: true });
+  G.bossStack = stack;
+  const ev = nearestElevator(P.pos);
+  const d = V().subVectors(ev.front, P.pos).setY(0).normalize();
+  const want = P.pos.clone().addScaledVector(d, 1.5);
+  boss.walkTo(npcCtx(), want.x, want.z, { speed: 2.6, anim: 'offer' });
+  boss.arriveAnim = 'offer';
+  boss.char.setFace('smile');
+  after(0.6, () => { boss.say('이것만 하고 가~', 3, G.rtime); G.bossSaid = G.rtime; sfx('mumbleLow', { vol: 0.7 }); });
+  after(1.2, () => { setFace('endure', 2); ui.subtitle('나', '(…5분 남았는데)', 1800); });
+}
+function takeBinders() {
+  const S = G.S, boss = npcByRole(S, 'boss');
+  phase('boil');
+  objective(null);
+  const g = G.bossStack.group;
+  boss.char.chest.remove(g);
+  P.char.hold(g, { both: true }); P.carry = g; P.carryKind = 'binders';
+  P.char.playOnce('take');
+  sfx('drop', { vol: 0.6 });
+  boss.char.setAnim('idle'); boss.char.setFace('smug');
+  after(0.4, () => boss.say('내일 아침까지~ 수고해!', 2.4, G.rtime));
+  after(1.6, () => { const h = S.F.anchors.hide[0]; boss.walkTo(npcCtx(), h.x + 1.2, h.z - 0.6, { speed: 1.2, anim: 'walk' }); });
+  doneTask(0);
+  startRage();
+}
+function startRage() {
+  P.controls = false;
+  audio.music('tense');
+  const s0 = G.stress;
+  const steps = 8;
+  for (let i = 1; i <= steps; i++) {
+    after(i * 0.42, () => {
+      setStress(s0 + (100 - s0) * (i / steps), false);
+      sfx('heartbeat', { vol: 0.75 });
+      ui.vignette(0.3 + 0.7 * (i / steps));
+      setFace('endure');
+      if (i === steps - 2) ui.subtitle('나', '……', 1200);
+    });
+  }
+  after(steps * 0.42 + 0.5, () => {
+    P.rage = true; setFace('rage');
+    ui.banner('스트레스 100%', '참을 만큼 참았다', 2000);
+    if (!ui.settings.calm) ui.flash('#ff5a3a', 260);
+    sfx('stressUp', { vol: 0.9 }); vibrate(80);
+    G.shake = 0.8;
+    // throw the binders
+    const g = dropCarry();
+    if (g) {
+      const S = G.S;
+      const prop = G.bossStack;
+      const fwd = V(Math.sin(P.yaw), 0, Math.cos(P.yaw));
+      S.F.group.add(prop.group);
+      const rec = S.phys.addProp(prop, P.pos.x + fwd.x * 0.5, 1.0, P.pos.z + fwd.z * 0.5, P.yaw, 'thrown');
+      rec.body.wakeUp(); rec.body.velocity.set(fwd.x * 7, 4, fwd.z * 7); rec.body.angularVelocity.set(rnd(-6, 6), rnd(-6, 6), rnd(-6, 6));
+      rec.energized = S.phys.time + 3;
+      fx.papers(V(P.pos.x + fwd.x * 0.6, 1.4, P.pos.z + fwd.z * 0.6), 10, 2.2);
+    }
+    P.char.playOnce('smash');
+  });
+  after(steps * 0.42 + 1.9, () => { ui.vignette(0); startRampage(); });
+}
+
+function nearestElevator(p) {
+  let best = null, bd = 1e9;
+  for (const ev of G.S.F.elevators) { const d = ev.front.distanceTo(p); if (d < bd) { bd = d; best = ev; } }
+  return best;
+}
+function elevatorObjective(dest) {
+  const ev = nearestElevator(P.pos);
+  return { pos: ev.cabin.clone(), h: 2.6, kind: 'elevator', dest, floor: G.floorKind };
+}
+function objective(o) {
+  G.obj = o;
+  if (o) fx.marker(o.pos, o.h || 2.3); else fx.marker(null);
+  G.cand = o && o.cand ? o.cand : null;
+}
+
+// ================================================================ rampage
+const TASKS_OFFICE = [
+  { text: '책상 뒤집기 3개', key: 'flip', need: 3, bonus: 50000 },
+  { text: '모니터 5대 부수기', key: 'monitor', need: 5, bonus: 50000 },
+  { text: '복합기 부수기', key: 'printer', need: 1, bonus: 80000 },
+  { text: '화분 걷어차기 3개', key: 'plantKick', need: 3, bonus: 30000 },
+  { text: '의자 날리기 5개', key: 'chairHit', need: 5, bonus: 30000 },
+  { text: '서류 흩날리기 30장', key: 'paper', need: 30, bonus: 20000 },
+  { text: '정수기 쓰러뜨리기', key: 'waterCooler', need: 1, bonus: 30000 },
+  { text: '필살기 쓰기', key: 'special', need: 1, bonus: 40000 },
+];
+const TASKS_LOBBY = [
+  { text: '커피 엎기 6잔', key: 'coffee', need: 6, bonus: 40000 },
+  { text: '차단봉 쓰러뜨리기 4개', key: 'stanchion', need: 4, bonus: 30000 },
+  { text: '소파 날리기', key: 'sofaHit', need: 1, bonus: 40000 },
+  { text: '화분 걷어차기 3개', key: 'plantKick', need: 3, bonus: 30000 },
+  { text: '카페 의자 날리기 4개', key: 'cafeChairHit', need: 4, bonus: 30000 },
+  { text: '에스프레소 머신 부수기', key: 'espresso', need: 1, bonus: 80000 },
+  { text: '필살기 쓰기', key: 'special', need: 1, bonus: 40000 },
+];
+// tiers for a person playing one minute (≈0.6–1.2M won); the scripted bot does ~2.5–3M
+const RANKS = [
+  [0, '모범 사원', '부순 게 거의 없네요. 내일도 출근하실 거죠?'],
+  [50000, '소심한 반항아', '키보드 하나에도 손이 떨렸군요.'],
+  [180000, '탕비실 파괴자', '부장님 머그컵의 명복을 빕니다.'],
+  [420000, '부서 해체 전문가', '인사팀이 조직도를 다시 그리는 중이에요.'],
+  [850000, '인간 태풍', '관리팀이 보험 약관을 읽기 시작했어요.'],
+  [1500000, '전설의 퇴사 예정자', '사내 게시판에 당신 이름이 올라왔어요.'],
+  [2400000, '회사 뿌개기 장인', '건물주가 직접 전화를 걸어 왔습니다.'],
+];
+const DESKS = new Set(['desk', 'deskL', 'meetingTable', 'roundTable']);
+const PAPERY = new Set(['desk', 'deskL', 'printer', 'paperStack', 'binders', 'binderStack', 'paperBox', 'shelf', 'cabinet', 'cabinetTall', 'whiteboard', 'meetingTable']);
+const BREAK_SFX = { wood: 'breakWood', glass: 'breakGlass', metal: 'breakMetal', plastic: 'breakPlastic', ceramic: 'breakCeramic' };
+const HIT_SFX = { wood: 'hitWood', glass: 'hitGlass', metal: 'hitMetal', plastic: 'hitPlastic', soft: 'hitSoft', paper: 'hitPaper', ceramic: 'hitCeramic', plant: 'hitPlant' };
+
+function resetDamage() {
+  G.money = 0; G.items = new Map(); G.combo = 0; G.comboT = 0; G.special = 0; G.counts = {};
+  ui.combo(0); ui.special(0);
+}
+function startRampage() {
+  G.scene = G.mode === 'free' ? 'free' : 'rampage';
+  phase('');
+  G.rampage = true; G.canDamage = true; G.busy = false;
+  G.timeLeft = G.mode === 'free' ? null : 60;
+  P.controls = true; P.rage = true; unseat(); dropCarry();
+  P.char.setAnim('rageIdle'); setFace('rage');
+  if (G.mode !== 'story') resetDamage();
+  for (const ev of G.S.F.elevators) ev.locked = false;
+  objective(null);
+  audio.music('rage'); audio.intensity(1);
+  hudRampage();
+  setStress(100, false);
+  G.relief0 = 100;
+  const info = FLOOR_INFO[G.floorKind];
+  ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: info.name, tone: 'rage' });
+  ui.timer(G.timeLeft);
+  initTasks(G.floorKind);
+  if (G.mode !== 'story') { ui.banner(G.mode === 'free' ? '자유 난동' : '1분 난동!', '다 뒤집어엎어라', 1600); sfx('whistle', { vol: 0.6 }); }
+  // the yell startles people nearby
+  after(0.4, () => alarmAt(P.pos, 5.5));
+}
+function initTasks(kind) {
+  G.taskPool = (kind === 'lobby' ? TASKS_LOBBY : TASKS_OFFICE).map((t) => Object.assign({ done: false, doneAt: 0 }, t));
+  // rotate the order a little so runs differ
+  const k = (Math.random() * 3) | 0;
+  G.taskPool = G.taskPool.slice(k).concat(G.taskPool.slice(0, k));
+  G.taskShown = G.taskPool.slice(0, 2);
+  refreshTasks();
+}
+function refreshTasks() { ui.tasks(G.taskShown.map((t) => ({ text: t.text, done: t.done, plain: true }))); }
+function checkTasks() {
+  let changed = false;
+  for (const t of G.taskShown) {
+    if (!t.done && (G.counts[t.key] || 0) >= t.need) {
+      t.done = true; t.doneAt = G.rtime; changed = true;
+      addMoney(t.bonus, null, true);
+      addItem('난동 목표 보너스', t.bonus);
+      ui.toast(`${t.text} 달성! 보너스 +${fmt(t.bonus)}원`, 2000);
+      sfx('check', { vol: 0.8 });
+    }
+  }
+  for (let i = 0; i < G.taskShown.length; i++) {
+    const t = G.taskShown[i];
+    if (t.done && G.rtime - t.doneAt > 1.4) {
+      const next = G.taskPool.find((q) => !q.done && !G.taskShown.includes(q));
+      if (next) { G.taskShown[i] = next; changed = true; } else if (G.taskShown.length > 1) { G.taskShown.splice(i, 1); changed = true; i--; }
+    }
+  }
+  if (changed) refreshTasks();
+}
+function count(key, n = 1) { G.counts[key] = (G.counts[key] || 0) + n; }
+function addItem(name, amount) {
+  const it = G.items.get(name) || { name, count: 0, amount: 0 };
+  it.count++; it.amount += amount; G.items.set(name, it);
+}
+function addMoney(amt, worldPos, quiet = false, charge = false) {
+  if (amt <= 0) return;
+  G.money += amt;
+  ui.money(G.money, G.rampage || G.mode !== 'story' ? '피해 총액' : '피해액');
+  if (worldPos) { const s = toScreen(worldPos); if (s) ui.moneyPop(s.x, s.y, amt); }
+  if (!quiet) sfx('coin', { vol: 0.45, pitch: 1 + Math.min(G.combo, 16) * 0.045 });
+  if (charge) G.special = Math.min(1, G.special + amt / 380000);
+  if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); }
+  ui.special(G.special);
+  // stress drains as damage accumulates (that is the relief)
+  const relief = 100 * (1 - Math.exp(-G.money / 400000)); // ~90% after a good human minute (~900k)
+  setStress(100 - relief, false);
+}
+function alarmAt(pos, rad = 9) {
+  const ctx = npcCtx();
+  for (const n of G.S.npcs) if (!n.gone && n.pos.distanceTo(pos) < rad) n.alarm(ctx, pos);
+}
+const _c = V(), _d = V();
+function recPos(r, out = V()) { const p = r.body.position; return out.set(p.x, p.y, p.z); }
+function hitRec(rec, dmg, dir, power, opts = {}) {
+  const S = G.S, b = rec.body;
+  S.touched = true;
+  b.wakeUp();
+  if (power > 0) {
+    const m = Math.max(0.3, rec.mass);
+    const dv = power * clamp(2.4 / Math.sqrt(m / 4), 0.22, 3.2);
+    b.velocity.x += dir.x * dv; b.velocity.z += dir.z * dv; b.velocity.y += dv * 0.45 + (rec.mass < 20 ? 1.2 : 0.4);
+    b.angularVelocity.x += rnd(-1, 1) * dv * 2; b.angularVelocity.y += rnd(-1, 1) * dv * 2; b.angularVelocity.z += rnd(-1, 1) * dv * 2;
+    S.phys.wakeNear(b.position.x, b.position.y, b.position.z, Math.max(rec.hx, rec.hz) + 0.3, rec);
+  }
+  rec.energized = S.phys.time + 2.5;
+  const c = recPos(rec, _c);
+  fx.sparks(c, opts.big ? 14 : 8, 4);
+  fx.debris(c, rec.colors, opts.big ? 8 : 4, 2.2, Math.min(0.09, 0.03 + Math.cbrt(rec.mass) * 0.012));
+  if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.3, c.z), rec.type === 'printer' ? 5 : 3, 1.8));
+  sfx(HIT_SFX[rec.material] || 'hitPlastic', { vol: opts.vol || 0.8, pitch: rnd(0.9, 1.1) });
+  if (rec.type === 'chair' && !rec.kicked) { rec.kicked = true; count('chairHit'); }
+  if (rec.type === 'cafeChair' && !rec.kicked) { rec.kicked = true; count('cafeChairHit'); }
+  if ((rec.type === 'sofa' || rec.type === 'sofaYellow') && !rec.kicked) { rec.kicked = true; count('sofaHit'); }
+  if (rec.type === 'stanchion' && !rec.kicked) { rec.kicked = true; count('stanchion'); }
+  if (rec.material === 'plant' && opts.kick && !rec.kicked) { rec.kicked = true; count('plantKick'); }
+  if (!rec.destroyed) {
+    const before = rec.hp;
+    rec.hp -= dmg;
+    const share = rec.price * 0.5;
+    const amt = Math.min(Math.round(share * Math.min(dmg, before) / rec.hpMax), Math.max(0, Math.round(share) - rec.paid));
+    rec.paid += amt;
+    if (opts.direct) { G.combo++; G.comboT = 1.5; ui.combo(G.combo); }
+    if (amt > 0) addMoney(amt, V(c.x, c.y + rec.hy + 0.2, c.z), false, !!opts.direct);
+    if (rec.hp <= 0) destroyRec(rec, dir, { charge: !!opts.direct });
+  }
+  alarmAt(c, 9);
+  if (opts.shake !== false) G.shake = Math.max(G.shake, 0.18 + Math.min(0.6, rec.mass / 120));
+  if (rec.mass > 10 && opts.direct) G.hitStop = Math.max(G.hitStop, 0.05);
+  if (opts.direct) vibrate(rec.mass > 10 ? 25 : 12);
+}
+function destroyRec(rec, dir, { flip = false, charge = false } = {}) {
+  if (rec.destroyed) return;
+  rec.destroyed = true;
+  const rest = Math.max(0, rec.price - rec.paid);
+  rec.paid = rec.price;
+  addItem(rec.name, rec.price);
+  const c = recPos(rec, V());
+  if (rest > 0) addMoney(rest, V(c.x, c.y + rec.hy + 0.35, c.z), false, charge || flip);
+  count(rec.type);
+  if (rec.type === 'icedCoffee' || rec.type === 'hotCoffee') count('coffee');
+  if (rec.type === 'coffeeTray') count('coffee', 6);
+  if (rec.type === 'mug') count('coffee');
+  if (!flip) {
+    sfx(BREAK_SFX[rec.material] || 'crash', { vol: 0.85, pitch: rnd(0.92, 1.08) });
+    fx.debris(c, rec.colors, rec.mass > 15 ? 16 : 10, 3, Math.min(0.12, 0.035 + Math.cbrt(rec.mass) * 0.015));
+    fx.sparks(c, 12, 5);
+    if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.4, c.z), 6, 2.4));
+  }
+  if (rec.mass < 15 && !rec.heavy && !flip) {
+    G.removeQ.push(rec);
+  } else if (!flip) {
+    // keep the wreck, a little darker
+    rec.group.traverse((m) => {
+      if (!m.isMesh || !m.material || Array.isArray(m.material)) return;
+      let w = WRECK.get(m.material);
+      if (!w) { w = m.material.clone(); if (w.color) w.color.multiplyScalar(0.62); WRECK.set(m.material, w); }
+      m.material = w;
+    });
+  }
+}
+const WRECK = new Map();
+G.removeQ = [];
+function onImpact(rec, other, v) {
+  if (!G.rampage) return;
+  const t = G.S.phys.time;
+  if (rec.cool > t) return;
+  const charged = rec.energized > t || (other && other.energized > t);
+  if (!charged || v < 5.2) return;
+  rec.cool = t + 0.35;
+  G.impacts.push([rec, v]);
+}
+function flushImpacts() {
+  if (!G.impacts.length) return;
+  const list = G.impacts; G.impacts = [];
+  for (const [rec, v] of list) {
+    if (rec.removed) continue;
+    hitRec(rec, v > 9 ? 2 : 1, _d.set(0, 0, 0), 0, { vol: clamp(v / 12, 0.3, 0.8), shake: false });
+  }
+}
+function flushRemovals() {
+  if (!G.removeQ.length) return;
+  for (const r of G.removeQ) { if (P.held === r) continue; G.S.phys.remove(r); }
+  G.removeQ.length = 0;
+}
+
+// ---- targeting
+function facing() { return V(Math.sin(P.yaw), 0, Math.cos(P.yaw)); }
+function pickTarget(range, includeNpc = true) {
+  const S = G.S, f = facing();
+  let best = null, bs = 1e9, kind = null;
+  for (const r of S.phys.records) {
+    if (r.removed || r.held || r.destroyed && r.mass < 15) continue;
+    const p = r.body.position;
+    if (p.y > 2.2) continue;
+    const dx = p.x - P.pos.x, dz = p.z - P.pos.z;
+    const reach = range + Math.min(0.6, Math.max(r.hx, r.hz) * 0.7);
+    const d = Math.hypot(dx, dz);
+    if (d > reach) continue;
+    const a = d > 0.01 ? Math.acos(clamp((dx * f.x + dz * f.z) / d, -1, 1)) : 0;
+    if (a > 1.25 && d > 0.8) continue;
+    let s = d + a * 0.9 + (r.destroyed ? 1.5 : 0) + (r.price <= 0 ? 2 : 0);
+    if (s < bs) { bs = s; best = r; kind = 'rec'; }
+  }
+  if (includeNpc) for (const n of S.npcs) {
+    if (n.gone || n.state === 'air' || n.state === 'down' || n.role === 'barista' && n.seated) continue;
+    const dx = n.pos.x - P.pos.x, dz = n.pos.z - P.pos.z, d = Math.hypot(dx, dz);
+    if (d > range + 0.2) continue;
+    const a = d > 0.01 ? Math.acos(clamp((dx * f.x + dz * f.z) / d, -1, 1)) : 0;
+    if (a > 1.0 && d > 0.7) continue;
+    const s = d + a * 0.9 + 0.35;
+    if (s < bs) { bs = s; best = n; kind = 'npc'; }
+  }
+  return best ? { kind, t: best } : null;
+}
+function aimAt(p) { P.yaw = Math.atan2(p.x - P.pos.x, p.z - P.pos.z); }
+function attack(kind) {
+  if (P.attackT > 0 || P.seated || G.busy || !P.controls && G.rampage === false) return;
+  if (P.held) { throwHeld(); return; }
+  if (P.carry) return;
+  if (!G.canDamage) {
+    // story: a frustrated air punch, no damage
+    P.char.playOnce(kind === 'kick' ? 'kick' : 'punch');
+    sfx('whoosh', { vol: 0.5 });
+    setFace('endure', 0.9);
+    P.attackT = 0.45;
+    return;
+  }
+  const range = kind === 'kick' ? 1.75 : 1.6;
+  const tg = pickTarget(range);
+  if (tg) aimAt(tg.kind === 'rec' ? tg.t.body.position : tg.t.pos);
+  P.swing ^= 1;
+  P.char.playOnce(kind === 'kick' ? 'kick' : P.swing ? 'punch' : 'punchL');
+  sfx('whoosh', { vol: 0.45, pitch: kind === 'kick' ? 0.8 : 1.1 });
+  P.attackT = kind === 'kick' ? 0.46 : 0.3;
+  after(kind === 'kick' ? 0.19 : 0.11, () => resolveHit(kind));
+}
+function resolveHit(kind) {
+  if (!G.canDamage || !G.S) return;
+  const tg = pickTarget(kind === 'kick' ? 2.0 : 1.85);
+  if (!tg) return;
+  const power = kind === 'kick' ? 2.3 : 1.25;
+  if (tg.kind === 'npc') {
+    const n = tg.t;
+    const dir = V(n.pos.x - P.pos.x, 0, n.pos.z - P.pos.z).normalize();
+    if (n.knock(npcCtx(), dir, kind === 'kick' ? 1.3 : 0.8)) {
+      sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.8 });
+      fx.sparks(V(n.pos.x, 1.1, n.pos.z), 8, 3);
+      G.shake = Math.max(G.shake, 0.35); G.hitStop = Math.max(G.hitStop, 0.06);
+      G.combo++; G.comboT = 1.5; ui.combo(G.combo);
+      alarmAt(n.pos, 9);
+      if (Math.random() < 0.4) after(0.5, () => n.say(['아야…', '왜 나한테!', '산재 처리 되나요?!'][(Math.random() * 3) | 0], 1.8, G.rtime));
+    }
+    return;
+  }
+  const r = tg.t;
+  const dir = V(r.body.position.x - P.pos.x, 0, r.body.position.z - P.pos.z);
+  if (dir.lengthSq() < 1e-4) dir.copy(facing()); dir.normalize();
+  sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.65 });
+  hitRec(r, kind === 'kick' ? 2 : 1, dir, power, { direct: true, kick: kind === 'kick', big: kind === 'kick' });
+}
+function flipDesk(rec) {
+  const S = G.S;
+  if (rec.flipped || rec.removed) return;
+  rec.flipped = true;
+  const b = rec.body;
+  const d = V(b.position.x - P.pos.x, 0, b.position.z - P.pos.z);
+  if (d.lengthSq() < 1e-4) d.copy(facing()); d.normalize();
+  aimAt(b.position);
+  P.char.playOnce('flip');
+  b.wakeUp();
+  b.velocity.set(d.x * 2.6, 4.4, d.z * 2.6);
+  b.angularVelocity.set(d.z * 6.5, rnd(-1, 1), -d.x * 6.5);
+  rec.energized = S.phys.time + 3;
+  // everything on top flies
+  const R = { x: b.position.x, z: b.position.z, hx: rec.hx + 0.12, hz: rec.hz + 0.12, rot: 0 };
+  const q = b.quaternion; const yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
+  R.c = Math.cos(yaw); R.s = Math.sin(yaw);
+  for (const r of S.phys.records) {
+    if (r === rec || r.removed || r.held) continue;
+    const p = r.body.position;
+    if (p.y < 0.6 || p.y > 1.8 || !pointInRect(R, p.x, p.z, 0)) continue;
+    r.body.wakeUp();
+    r.body.velocity.set(d.x * rnd(1.5, 4) + rnd(-1, 1), rnd(3, 6.5), d.z * rnd(1.5, 4) + rnd(-1, 1));
+    r.body.angularVelocity.set(rnd(-9, 9), rnd(-9, 9), rnd(-9, 9));
+    r.energized = S.phys.time + 3;
+  }
+  sfx('flip', { vol: 0.9 });
+  after(0.35, () => sfx('crash', { vol: 0.7 }));
+  const c = recPos(rec, V());
+  count('paper', fx.papers(V(c.x, 1.0, c.z), 8, 2.2));
+  fx.debris(c, rec.colors, 6, 2.5, 0.05);
+  destroyRec(rec, d, { flip: true });
+  count('flip');
+  G.combo++; G.comboT = 1.5; ui.combo(G.combo);
+  G.shake = Math.max(G.shake, 0.7); G.hitStop = Math.max(G.hitStop, 0.07);
+  vibrate(45);
+  alarmAt(c, 10);
+}
+function pickUp(rec) {
+  const S = G.S;
+  if (rec.removed || rec.held) return;
+  S.phys.detach(rec);
+  rec.group.matrixAutoUpdate = true;
+  const both = rec.mass > 2.5 || rec.prop.size.y > 0.4;
+  P.char.hold(rec.group, { both });
+  if (!both) rec.group.position.set(0, -0.05, 0.02);
+  P.held = rec; P.heldBoth = both;
+  P.char.playOnce('take');
+  sfx('pickup', { vol: 0.6 });
+}
+function throwHeld() {
+  const S = G.S, rec = P.held;
+  if (!rec) return;
+  P.held = null;
+  const wp = V(); rec.group.getWorldPosition(wp);
+  if (rec.group.parent) rec.group.parent.remove(rec.group);
+  S.F.group.add(rec.group);
+  rec.group.matrixAutoUpdate = false;
+  const f = facing();
+  S.phys.reattach(rec, V(wp.x + f.x * 0.3, Math.max(0.6, wp.y + rec.hy), wp.z + f.z * 0.3), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, P.yaw, 0)));
+  rec.body.velocity.set(f.x * 11, 3.2, f.z * 11);
+  rec.body.angularVelocity.set(rnd(-8, 8), rnd(-8, 8), rnd(-8, 8));
+  rec.energized = S.phys.time + 3;
+  syncRec(rec);
+  P.char.playOnce(P.heldBoth ? 'smash' : 'punch');
+  sfx('whoosh', { vol: 0.7, pitch: 0.85 });
+  P.attackT = 0.35;
+}
+function special() {
+  if (G.special < 1 || !G.canDamage || P.seated) return;
+  G.special = 0; G.specialReadyShown = false; ui.special(0);
+  count('special');
+  P.char.playOnce('special');
+  sfx('special', { vol: 0.9 });
+  G.slowT = 0.75; G.slowScale = 0.28;
+  if (!ui.settings.calm) ui.flash('#fff4c0', 200);
+  after(0.55, () => {
+    const S = G.S, c = P.pos.clone();
+    fx.shockwave(c, 6.5);
+    G.shake = 1.1; G.hitStop = 0.08;
+    if (!ui.settings.calm) ui.flash('#ffe08a', 260);
+    vibrate(120);
+    for (const r of S.phys.records) {
+      if (r.removed || r.held) continue;
+      const p = r.body.position;
+      const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz);
+      if (d > 6.2) continue;
+      const dir = d > 0.01 ? V(dx / d, 0, dz / d) : V(1, 0, 0);
+      const k = 1 - d / 6.5;
+      hitRec(r, 1, dir, 2.2 + k * 3.2, { shake: false, vol: 0.35 });
+    }
+    const ctx = npcCtx();
+    for (const n of S.npcs) {
+      if (n.gone) continue;
+      const d = n.pos.distanceTo(c);
+      if (d < 7) n.knock(ctx, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.4 * (1 - d / 8));
+    }
+    sfx('crash', { vol: 1 });
+  });
+}
+
+// ---- interact candidates during the rampage
+function rampageCandidate() {
+  if (P.held) return null;
+  const S = G.S, f = facing();
+  let best = null, bs = 1e9;
+  for (const r of S.phys.records) {
+    if (r.removed || r.held) continue;
+    const isDesk = DESKS.has(r.type) && !r.flipped && recUpright(r) > 0.9;
+    const canPick = r.mass <= 8 && !isDesk && r.price > 0;
+    if (!isDesk && !canPick) continue;
+    const p = r.body.position;
+    const dx = p.x - P.pos.x, dz = p.z - P.pos.z;
+    const reach = (isDesk ? 1.05 : 0.95) + Math.min(0.75, Math.max(r.hx, r.hz) * 0.8);
+    const d = Math.hypot(dx, dz);
+    if (d > reach || p.y > 1.6) continue;
+    const a = d > 0.01 ? Math.acos(clamp((dx * f.x + dz * f.z) / d, -1, 1)) : 0;
+    if (a > 1.1 && d > 0.7) continue;
+    const s = d + a * 0.8 + (isDesk ? -0.2 : 0);
+    if (s < bs) { bs = s; best = r; }
+  }
+  if (!best) return null;
+  const isDesk = DESKS.has(best.type);
+  return {
+    id: 'rec' + best.id, rec: best, pos: V(best.body.position.x, 0, best.body.position.z), h: isDesk ? 0.55 : best.body.position.y + 0.15, obj: best.group,
+    text: isDesk ? '엎기' : '집기', hold: isDesk ? 0.42 : 0, range: 99, onDone: () => (isDesk ? flipDesk(best) : pickUp(best)),
+  };
+}
+
+// ================================================================ bill
+function showBill() {
+  if (G.scene === 'bill') return;
+  G.scene = 'bill'; G.rampage = false; G.canDamage = false; G.timeLeft = null;
+  ui.prompt(null); ui.timer(null); ui.combo(0); ui.elevator(null); ui.vignette(0); ui.subtitle(null, null);
+  gfx.clearHighlight(); objective(null);
+  releaseLock();
+  const items = [...G.items.values()].sort((a, b) => b.amount - a.amount);
+  const total = Math.round(G.money);
+  const key = G.mode;
+  const prev = save.best[key] || 0;
+  const isBest = total > prev && total > 0;
+  if (isBest) save.best[key] = total;
+  if (G.mode === 'story') save.days = (save.days | 0) + 1;
+  writeSave();
+  let rank = RANKS[0];
+  for (const r of RANKS) if (total >= r[0]) rank = r;
+  const relief = clamp(100 - G.stress, 0, 100);
+  after(0.3, () => {
+    ui.hud(false);
+    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, total, best: prev, isBest, relief, title: rank[1], comment: rank[2] });
+    audio.music('bill');
+    after(0.5, () => sfx('stamp', { vol: 0.8 }));
+    after(0.9, () => sfx(isBest ? 'newRecord' : 'fanfare', { vol: 0.7 }));
+  });
+  if (G.fast) runTimersNow();
+  P.rage = false;
+  setFace(total > 0 ? 'relief' : 'normal');
+  P.char.setAnim(total > 0 ? 'cheer' : 'idle');
+  G.lastBill = { mode: G.mode, items: items.length, total, isBest, relief, rank: rank[1] };
+}
+function runTimersNow() { /* timers run on the next ticks; nothing to force */ }
+function endRampage() {
+  G.rampage = false; G.canDamage = false;
+  ui.timer(0);
+  sfx('whistle', { vol: 0.9 });
+  G.slowT = 1.3; G.slowScale = 0.3;
+  ui.banner('끝!', '', 1500);
+  P.controls = false;
+  after(1.7, () => showBill());
+}
+
+// ================================================================ elevators
+function updateElevators(dt) {
+  const S = G.S; if (!S) return;
+  for (const ev of S.F.elevators) {
+    const rel = V().subVectors(P.pos, ev.front);
+    const along = rel.dot(ev.fwd), lat = rel.dot(ev.right);
+    const inside = along < -0.3 && along > -1.6 && Math.abs(lat) < 0.6;
+    const near = along > -0.3 && along < 2.4 && Math.abs(lat) < 1.6;
+    let npcNear = false;
+    for (const n of S.npcs) if (!n.gone && (n.state === 'flee' || n.state === 'leave') && n.pos.distanceTo(ev.front) < 2.4) npcNear = true;
+    if (ev.hold > 0) ev.hold -= dt;
+    const want = !ev.closing && !ev.locked && (G.mode !== 'title') && (near || inside || npcNear || ev.hold > 0);
+    const target = want ? 1 : 0;
+    if (target && ev.open < 0.02 && !ev.sounding) { sfx('doorOpen', { vol: 0.5 }); ev.sounding = true; }
+    if (!target && ev.open > 0.98 && ev.sounding) { sfx('doorClose', { vol: 0.4 }); ev.sounding = false; }
+    ev.open = clamp(ev.open + (target ? 1 : -1) * dt * 1.6, 0, 1);
+    ev.prop.set(ev.open);
+    ev.inside = inside;
+    if (inside && !ev.dismissed && !G.evPanel && !G.busy && G.scene !== 'bill' && G.mode !== 'title' && ev.open > 0.6 && !ev.closing) {
+      G.evPanel = ev;
+      releaseLock(); // the floor buttons need a visible cursor
+      ui.elevator({ current: G.floorKind, floors: [FLOOR_INFO.office, FLOOR_INFO.lobby] });
+      sfx('ui', { vol: 0.5 });
+    }
+    if (!inside) { ev.dismissed = false; if (G.evPanel === ev) { G.evPanel = null; ui.elevator(null); } }
+  }
+}
+function onElevator(id) {
+  const ev = G.evPanel; G.evPanel = null;
+  ui.elevator(null);
+  if (!ev) return;
+  if (!id || id === G.floorKind) { ev.dismissed = true; return; }
+  ride(ev, id);
+}
+function ride(ev, dest) {
+  if (G.busy) return;
+  G.busy = true; P.controls = false;
+  ev.closing = true; ev.dismissed = true;
+  P.yaw = Math.atan2(ev.fwd.x, ev.fwd.z);
+  sfx('doorClose', { vol: 0.5 });
+  const go = () => {
+    ev.closing = false;
+    const idx = ev.index;
+    transition(null, () => {
+      if (G.mode === 'free') G.preset = dest === 'lobby' ? 'noon' : 'day';
+      enterFloor(dest, { elevator: idx });
+      P.controls = true;
+      if (G.rampage) {
+        ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: FLOOR_INFO[dest].name, tone: 'rage' });
+        if (G.mode === 'free') initTasks(dest);
+      }
+    }, 700);
+  };
+  after(0.7, go);
+}
+
+// ================================================================ NPC context
+let _ctx = null;
+const _head = V();
+function npcCtx() {
+  if (!_ctx) _ctx = { sfx, pickExit, pickHide };
+  const S = G.S;
+  _ctx.nav = S ? S.nav : null;
+  _ctx.lists = S ? S.lists : [];
+  _ctx.player = P.pos; _ctx.playerHead = _head.set(P.pos.x, 1.45, P.pos.z);
+  _ctx.now = G.rtime;
+  return _ctx;
+}
+function pickExit(pos, from) {
+  const S = G.S; const A = S.F.anchors;
+  let best = null, bs = 1e9;
+  const cands = [];
+  for (const ev of S.F.elevators) cands.push({ p: ev.front.clone().addScaledVector(ev.fwd, 0.55), leave: true, dir: ev.fwd });
+  if (A.door) cands.push({ p: A.door.clone(), leave: true, dir: V(0, 0, 1) });
+  for (const h of A.hide || []) cands.push({ p: h.clone(), leave: false });
+  if (A.meeting) cands.push({ p: A.meeting.clone(), leave: false });
+  for (const c of cands) {
+    const s = c.p.distanceTo(pos) - 0.9 * c.p.distanceTo(from) + rnd(0, 2.5);
+    if (s < bs) { bs = s; best = c; }
+  }
+  return { x: best.p.x, z: best.p.z, leave: best.leave, dir: best.dir };
+}
+function pickHide(pos, from) {
+  const S = G.S;
+  let best = S.F.anchors.hide[0], bs = 1e9;
+  for (const h of S.F.anchors.hide) { const s = h.distanceTo(pos) - 1.2 * h.distanceTo(from); if (s < bs) { bs = s; best = h; } }
+  return best;
+}
+
+// ================================================================ player update
+let _bot = null;
+function updatePlayer(dt) {
+  const S = G.S;
+  const c = P.char;
+  if (P.faceT > 0) { P.faceT -= dt; if (P.faceT <= 0) c.setFace(baseFace()); }
+  if (P.attackT > 0) P.attackT -= dt;
+  if (P.seated) {
+    P.speed = 0;
+    c.update(dt, 0);
+    S.phys.setPlayer(P.pos.x, 0, P.pos.z, 0, 0, 0);
+    return;
+  }
+  // movement intent (world space)
+  let mx = 0, mz = 0;
+  if (_bot && _bot.on) { mx = _bot.move.x; mz = _bot.move.z; }
+  else {
+    const [ix, iy] = moveInput();
+    if (ix || iy) {
+      const fx = Math.sin(CAM.yaw), fz = Math.cos(CAM.yaw);
+      mx = fx * iy - fz * ix; mz = fz * iy + fx * ix;
+      // right = (-fz, fx)
+      mx = fx * iy + (-fz) * ix; mz = fz * iy + fx * ix;
+    }
+  }
+  if (!P.controls || G.busy) { mx = 0; mz = 0; }
+  const carrying = !!P.carry || (P.held && P.heldBoth);
+  const vmax = carrying ? 1.9 : (G.rampage || G.mode === 'free' ? 4.7 : 3.0);
+  const tx = mx * vmax, tz = mz * vmax;
+  const acc = Math.min(1, dt * (mx || mz ? 12 : 16));
+  P.vel.x += (tx - P.vel.x) * acc; P.vel.z += (tz - P.vel.z) * acc;
+  P.prev.copy(P.pos);
+  if (P.push) {
+    const d = V().subVectors(P.push, P.pos).setY(0);
+    if (d.length() < 0.06) P.push = null; else { d.clampLength(0, dt * 2.2); P.pos.add(d); }
+  }
+  P.pos.x += P.vel.x * dt; P.pos.z += P.vel.z * dt;
+  // collisions: static + heavy props + people
+  collideCircle(P.pos, P.r, S.lists, P.y);
+  for (const n of S.npcs) {
+    if (n.gone || n.state === 'air' || n.state === 'down') continue;
+    const dx = P.pos.x - n.pos.x, dz = P.pos.z - n.pos.z, d = Math.hypot(dx, dz), m = P.r + n.r;
+    if (d < m && d > 1e-4) { P.pos.x += dx / d * (m - d); P.pos.z += dz / d * (m - d); }
+  }
+  collideCircle(P.pos, P.r, [S.F.rects], P.y);
+  const realV = Math.hypot(P.pos.x - P.prev.x, P.pos.z - P.prev.z) / Math.max(dt, 1e-4);
+  P.speed = Math.min(realV, Math.hypot(P.vel.x, P.vel.z));
+  if (P.speed > 0.25 && (mx || mz)) P.yaw = angLerp(P.yaw, Math.atan2(P.vel.x, P.vel.z), dt * 12);
+  // jump / gravity
+  if (IN.jumpQ > 0) {
+    IN.jumpQ = 0;
+    if (P.onGround && P.controls && !G.busy && !P.carry) { P.vy = 6.0; P.onGround = false; c.playOnce('jump'); sfx('jump', { vol: 0.45 }); }
+  }
+  if (!P.onGround) {
+    P.vy -= 18 * dt; P.y += P.vy * dt;
+    if (P.y <= 0) { P.y = 0; P.vy = 0; P.onGround = true; c.playOnce('land'); sfx('land', { vol: 0.5 }); }
+  }
+  // animation
+  let anim;
+  if (P.carry || (P.held && P.heldBoth)) anim = 'carry';
+  else if (P.speed > 3.2) anim = 'run';
+  else if (P.speed > 0.15) anim = 'walk';
+  else anim = G.scene === 'bill' && G.money > 0 ? 'cheer' : P.rage ? 'rageIdle' : 'idle';
+  if (c.anim !== anim) c.setAnim(anim);
+  c.update(dt, P.speed);
+  // footsteps
+  if (P.onGround && P.speed > 0.5) {
+    P.stepD += P.speed * dt;
+    if (P.stepD > (P.speed > 3.2 ? 0.95 : 0.7)) { P.stepD = 0; sfx(S.kind === 'office' ? 'stepCarpet' : 'step', { vol: 0.22, pitch: rnd(0.9, 1.1) }); }
+  }
+  placePlayer();
+  S.phys.setPlayer(P.pos.x, P.y, P.pos.z, (P.pos.x - P.prev.x) / dt, P.onGround ? 0 : P.vy, (P.pos.z - P.prev.z) / dt);
+}
+
+// ---- interaction focus + prompt
+function updateInteract(dt) {
+  let cand = null;
+  if (G.mode !== 'title' && G.scene !== 'bill' && !G.busy && !P.seated && P.controls) {
+    if (G.cand) {
+      const c = G.cand;
+      const d = Math.hypot(c.pos.x - P.pos.x, c.pos.z - P.pos.z);
+      if (d < c.range) cand = c;
+    }
+    if (!cand && G.canDamage) cand = rampageCandidate();
+  }
+  if (!cand || !G.focus || cand.id !== G.focus.id) G.holdT = 0;
+  G.focus = cand;
+  // a quick tap (down + up between two frames) still counts once
+  const press = (_bot && _bot.on) ? _bot.interact : (IN.interact || IN.interactQ > 0);
+  IN.interactQ = 0;
+  if (cand) {
+    if (press && !G.needRelease) {
+      if (cand.hold > 0) {
+        G.holdT += dt;
+        if (G.holdT >= cand.hold) { G.holdT = 0; G.needRelease = !(_bot && _bot.on); fire(cand); }
+      } else { G.needRelease = !(_bot && _bot.on); fire(cand); }
+    } else if (!press) G.holdT = 0;
+  } else if (P.held && press && !G.needRelease) { G.needRelease = !(_bot && _bot.on); throwHeld(); }
+  if (_bot && _bot.on && _bot.interact && cand && cand.hold === 0) _bot.interact = false;
+}
+function fire(c) { try { c.onDone(); } catch (e) { report(e); } G.focus = null; }
+
+// ================================================================ main tick
+function tick(dt) {
+  G.frames++;
+  const rdt = dt;
+  G.rtime += rdt;
+  runTimers();
+  // time scale: hit-stop and slow motion
+  let scale = 1;
+  if (G.hitStop > 0) { G.hitStop -= rdt; scale = 0.06; }
+  else if (G.slowT > 0) { G.slowT -= rdt; scale = G.slowScale; }
+  G.timeScale = scale;
+  const gdt = rdt * scale;
+  G.time += gdt;
+  const S = G.S;
+  if (!S) return;
+
+  if (_bot && _bot.on) botUpdate(rdt);
+  // story logic
+  if (!G.busy && G.mode === 'story' && STORY[G.scene]) { G.phaseT += rdt; STORY[G.scene].update(rdt); }
+  // inputs → actions
+  if (G.mode !== 'title' && G.scene !== 'bill' && !G.busy && P.controls) {
+    const botA = _bot && _bot.on;
+    if (IN.attackQ > 0 || IN.attack || (botA && _bot.attack)) { IN.attackQ = 0; attack('punch'); }
+    if (IN.kickQ > 0 || IN.kick || (botA && _bot.kick)) { IN.kickQ = 0; attack('kick'); }
+    if (IN.specialQ > 0 || (botA && _bot.special)) { IN.specialQ = 0; if (G.canDamage) special(); else if (G.mode === 'story') { /* nothing yet */ } }
+  } else { IN.attackQ = 0; IN.kickQ = 0; IN.specialQ = 0; }
+
+  updatePlayer(gdt > 0 ? gdt : rdt * 0.06);
+  updateInteract(rdt);
+  // physics
+  S.phys.step(gdt);
+  flushImpacts();
+  flushRemovals();
+  // thrown things knock people over
+  if (G.rampage) {
+    const t = S.phys.time;
+    for (const r of S.phys.records) {
+      if (r.removed || r.held || r.energized < t) continue;
+      const v = r.body.velocity; if (v.x * v.x + v.z * v.z < 16) continue;
+      const p = r.body.position;
+      for (const n of S.npcs) {
+        if (n.gone || n.state === 'air' || n.state === 'down') continue;
+        if (p.y > 1.9) continue;
+        const dx = n.pos.x - p.x, dz = n.pos.z - p.z;
+        if (dx * dx + dz * dz < 0.36) n.knock(npcCtx(), V(v.x, 0, v.z).normalize(), 0.7);
+      }
+    }
+  }
+  // obstacles + nav refresh
+  S.phys.obstacles(S.obst);
+  S.navT += rdt;
+  if (G.rampage && S.navT > 1.5) { S.navT = 0; rebuildNav(S); }
+  // NPCs
+  const ctx = npcCtx();
+  for (const n of S.npcs) { try { n.update(gdt, ctx); } catch (e) { report(e); } }
+  for (const w of S.walkers) w.update(gdt, ctx);
+  for (const fn of S.F.animate) fn(gdt, G.time);
+  for (const rp of S.ropes) {
+    if (!rp.m.visible) continue;
+    const a = rp.a.body.position, b = rp.b.body.position;
+    if (rp.a.removed || rp.b.removed || Math.abs(a.x - rp.ax) + Math.abs(a.z - rp.az) > 0.05 || Math.abs(b.x - rp.bx) + Math.abs(b.z - rp.bz) > 0.05) rp.m.visible = false;
+  }
+  updateElevators(rdt);
+  fx.update(gdt, G.rtime);
+  // rampage clock
+  if (G.rampage) {
+    if (G.special < 1) { G.special = Math.min(1, G.special + gdt / 45); ui.special(G.special); if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); } }
+    if (G.comboT > 0) { G.comboT -= gdt; if (G.comboT <= 0) { G.combo = 0; ui.combo(0); } }
+    checkTasks();
+    if (G.timeLeft != null && !G.busy) {
+      G.timeLeft -= gdt;
+      ui.timer(Math.max(0, G.timeLeft));
+      const sec = Math.ceil(G.timeLeft);
+      if (sec !== G.lastSec && sec <= 10 && sec > 0) sfx(sec <= 3 ? 'tickLast' : 'clockTick', { vol: 0.6 });
+      G.lastSec = sec;
+      if (G.timeLeft <= 0) { G.timeLeft = 0; endRampage(); }
+    }
+  }
+  if (G.shake > 0) G.shake = Math.max(0, G.shake - rdt * 2.6);
+  if (!G.rampage && G.mode === 'story' && G.scene !== 'bill' && G.phase !== 'boil') ui.vignette(clamp((G.stress - 62) / 50, 0, 0.6));
+  updateCamera(rdt);
+}
+
+// ================================================================ per-frame UI (prompt, bubbles, highlight)
+function frameUI() {
+  const S = G.S;
+  // prompt + highlight
+  const f = G.focus;
+  if (f && G.mode !== 'title' && G.scene !== 'bill') {
+    const s = toScreen(V(f.pos.x, f.h, f.pos.z));
+    if (s) ui.prompt({ key: TOUCH ? '행동' : 'E', text: f.text, x: s.x - 70, y: s.y, hold: f.hold > 0 ? G.holdT / f.hold : 0 });
+    else ui.prompt(null);
+    gfx.highlight(f.obj, G.rtime);
+  } else if (P.held && G.mode !== 'title' && G.scene !== 'bill') {
+    const s = toScreen(V(P.pos.x, 1.9, P.pos.z));
+    if (s) ui.prompt({ key: TOUCH ? '때리기' : '클릭', text: '던지기', x: s.x + 80, y: s.y, hold: 0 }); else ui.prompt(null);
+    gfx.highlight(null, 0);
+  } else { ui.prompt(null); gfx.highlight(null, 0); }
+  // bubbles
+  if (!S) return;
+  for (const n of S.npcs) {
+    const b = n.bubble;
+    if (!b || !b.text || b.until < G.rtime || n.gone || G.mode === 'title') { if (n._bubbleOn) { ui.bubble(n.id, null); n._bubbleOn = false; } if (b && b.until < G.rtime) n.bubble = null; continue; }
+    const hp = V(n.pos.x, n.y + (n.seated ? 1.45 : 1.95) * (n.char.group.scale.y || 1), n.pos.z);
+    const d = hp.distanceTo(camera.position);
+    const s = d < 18 ? toScreen(hp) : null;
+    if (s) { ui.bubble(n.id, { text: b.text, x: s.x, y: s.y }); n._bubbleOn = true; } else if (n._bubbleOn) { ui.bubble(n.id, null); n._bubbleOn = false; }
+  }
+}
+function renderNow() {
+  try { frameUI(); gfx.render(G.manual || G.rampage || (G.S && G.S.phys.awake > 0) ? 1 : 2); } catch (e) { report(e); }
+}
+
+// ================================================================ loop + adaptive quality
+let last = performance.now(), acc = 0;
+const Q = { samples: [], t: 0, stable: 0, done: DEBUG };
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (!G.manual && !G.paused) {
+    acc += dt;
+    let n = 0;
+    while (acc >= FIXED && n < 4) { try { tick(FIXED); } catch (e) { report(e); } acc -= FIXED; n++; }
+    if (n === 4) acc = 0;
+  }
+  renderNow();
+  // fps + adaptive quality during play
+  G.fpsAcc = (G.fpsAcc || 0) + dt; G.fpsN = (G.fpsN || 0) + 1;
+  if (G.fpsAcc > 1) { G.fps = Math.round(G.fpsN / G.fpsAcc); G.fpsAcc = 0; G.fpsN = 0; }
+  if (!Q.done && !G.manual && !document.hidden && G.mode !== 'title' && !G.paused) {
+    Q.samples.push(dt);
+    if (Q.samples.length >= 90) {
+      const s = Q.samples.slice().sort((a, b) => a - b); const med = s[s.length >> 1];
+      Q.samples.length = 0;
+      if (med > 0.024 && gfx.level < 3) { gfx.setQuality(gfx.level + 1); Q.stable = 0; }
+      else if (++Q.stable >= 3) Q.done = true;
+    }
+  }
+}
+
+// ================================================================ modes
+function start(mode, opts = {}) {
+  initAudio();
+  G.gen++; G.transN++; G.timers.length = 0;
+  G.mode = mode; G.opts = Object.assign({ floor: 'office', gender: ui.settings.gender }, opts);
+  G.paused = false; ui.pause(false); ui.bill(null); ui.title(false); ui.elevator(null); G.evPanel = null;
+  ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
+  resetDamage(); G.rampage = false; G.canDamage = false; G.timeLeft = null; G.stress = 0; G.queue = [];
+  if (G.opts.gender && G.opts.gender !== (P.char.group.name.endsWith('F') ? 'f' : 'm')) setPlayerChar(G.opts.gender);
+  // fresh floors (reuse the title office if nobody touched it)
+  const keep = G.floors.office && !G.floors.office.used && Object.keys(G.floors).length === 1 && mode === 'story';
+  if (!keep) disposeFloors();
+  else { scene.remove(G.S.F.group); G.S = null; G.floors.office.used = true; }
+  fx.clear();
+  Q.done = DEBUG; Q.samples.length = 0; Q.stable = 0;
+  if (mode === 'story') { G.scene = 'copier'; return gotoScene('copier'); }
+  if (mode === 'rush') {
+    return transition({ time: '오후 3:00', title: '1분 난동', sub: '참지 말고, 다 뒤집어엎자' }, () => {
+      G.preset = 'day';
+      const S = enterFloor('office', { at: getFloor('office').F.anchors.rushSpawn, yaw: -PI / 2 });
+      resetPlayer(); snapCamera();
+      startRampage();
+      void S;
+    });
+  }
+  if (mode === 'free') {
+    const fl = G.opts.floor === 'lobby' ? 'lobby' : 'office';
+    return transition({ time: fl === 'lobby' ? '낮 12:30' : '오후 3:00', title: '자유 난동', sub: FLOOR_INFO[fl].name }, () => {
+      G.preset = fl === 'lobby' ? 'noon' : 'day';
+      const S = getFloor(fl);
+      enterFloor(fl, { at: fl === 'office' ? S.F.anchors.rushSpawn : S.F.anchors.spawn, yaw: fl === 'office' ? -PI / 2 : -PI / 2 });
+      resetPlayer(); snapCamera();
+      startRampage();
+    });
+  }
+  return Promise.resolve();
+}
+function toTitle() {
+  G.gen++; G.transN++; G.timers.length = 0;
+  releaseLock();
+  G.mode = 'title'; G.scene = 'title'; G.paused = false; G.rampage = false; G.canDamage = false; G.busy = false;
+  ui.pause(false); ui.bill(null); ui.hud(false); ui.prompt(null); ui.elevator(null); ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
+  objective(null); G.evPanel = null;
+  if (!G.floors.office || G.floors.office.used || G.floors.lobby) disposeFloors();
+  fx.clear();
+  G.preset = 'title';
+  const S = enterFloor('office');
+  resetPlayer();
+  const seat = S.F.anchors.playerSeat;
+  P.pos.set(seat.x + 0.15, 0, seat.z + 0.62); P.yaw = 0.35; P.rage = true; placePlayer();
+  P.char.setAnim('rageIdle'); setFace('endure');
+  setStress(0, false);
+  for (const ev of S.F.elevators) { ev.open = 0; ev.prop.set(0); }
+  audio.music('title');
+  ui.title(true, { best: save.best.rush || 0, days: save.days });
+  CAM.drift = 0;
+  updateCamera(0, true);
+}
+function togglePause(on) {
+  if (G.mode === 'title' || G.scene === 'bill') return;
+  if (on === G.paused) return;
+  G.paused = on;
+  if (on) {
+    releaseLock();
+    ui.pause(true, { canSkip: G.mode === 'story' && !!STORY[G.scene] });
+    audio.suspend();
+    clearInput();
+  } else { ui.pause(false); audio.resume(); last = performance.now(); }
+}
+
+// ================================================================ auto bot (debug)
+function botUpdate(dt) {
+  const B = _bot;
+  B.move.set(0, 0, 0); B.attack = false; B.kick = false; B.special = false;
+  if (G.mode === 'title' || G.scene === 'bill' || G.busy || G.paused) { B.interact = false; return; }
+  // elevator panel → pick the destination
+  if (G.evPanel) {
+    const dest = B.dest || (G.obj && G.obj.dest) || (G.mode === 'free' ? (G.floorKind === 'office' ? 'lobby' : 'office') : null);
+    if (dest && dest !== G.floorKind) { onElevator(dest); B.dest = null; } else onElevator(null);
+    return;
+  }
+  let goal = null, wantInteract = false, near = 0.35;
+  if (G.rampage) {
+    if (G.special >= 1) B.special = true;
+    if (B.forceDest && B.forceDest !== G.floorKind) {
+      const ev = nearestElevator(P.pos); goal = ev.cabin.clone(); B.dest = B.forceDest; near = 0.2;
+    } else {
+      if (B.forceDest === G.floorKind) B.forceDest = null;
+      // nearest live target
+      let tr = B.target;
+      if (!tr || tr.removed || tr.destroyed || tr.held || G.rtime - B.targetT > 4) {
+        tr = null; let bd = 1e9;
+        for (const r of G.S.phys.records) {
+          if (r.removed || r.destroyed || r.held || r.price <= 0 || (B.skip.get(r) || 0) > G.rtime) continue;
+          const p = r.body.position; if (p.y > 1.8) continue;
+          const d = Math.hypot(p.x - P.pos.x, p.z - P.pos.z) + (r.mass < 1 ? 1.5 : 0);
+          if (d < bd) { bd = d; tr = r; }
+        }
+        if (B.target && B.target === tr) B.skip.set(tr, G.rtime + 6);
+        B.target = tr; B.targetT = G.rtime;
+      }
+      if (tr) {
+        const p = tr.body.position;
+        const d = Math.hypot(p.x - P.pos.x, p.z - P.pos.z);
+        goal = V(p.x, 0, p.z); near = 0.9 + Math.max(tr.hx, tr.hz) * 0.6;
+        if (d < 1.4 + Math.max(tr.hx, tr.hz) * 0.7) {
+          aimAt(p);
+          if (G.focus && G.focus.rec === tr && DESKS.has(tr.type)) wantInteract = true;
+          else if (P.held) B.attack = true;
+          else { B.flip = !B.flip; if (B.flip) B.attack = true; else B.kick = true; }
+          goal = null;
+        }
+      }
+    }
+  } else if (G.obj) {
+    const o = G.obj;
+    if (o.kind === 'elevator') { goal = o.pos.clone(); B.dest = o.dest; near = 0.15; }
+    else {
+      goal = o.cand ? o.cand.pos.clone() : o.pos.clone();
+      near = o.cand ? Math.min(1.2, o.cand.range * 0.6) : 0.3;
+      if (o.cand && G.focus && G.focus.id === o.cand.id) { wantInteract = true; aimAt(o.cand.pos); }
+    }
+  }
+  B.interact = wantInteract;
+  if (!goal || wantInteract) return;
+  const d = Math.hypot(goal.x - P.pos.x, goal.z - P.pos.z);
+  if (d < near) { if (G.obj && G.obj.cand) aimAt(G.obj.cand.pos); return; }
+  if (!B.path || G.rtime - B.pathT > 0.7 || B.goal.distanceTo(goal) > 0.4) {
+    B.path = G.S.nav.path(P.pos.x, P.pos.z, goal.x, goal.z) || [[goal.x, goal.z]];
+    B.pathI = 0; B.pathT = G.rtime; B.goal = goal.clone();
+  }
+  while (B.pathI < B.path.length - 1 && Math.hypot(B.path[B.pathI][0] - P.pos.x, B.path[B.pathI][1] - P.pos.z) < 0.3) B.pathI++;
+  const [wx, wz] = B.path[B.pathI];
+  const dx = wx - P.pos.x, dz = wz - P.pos.z, dl = Math.hypot(dx, dz);
+  if (dl > 0.01) { const k = Math.min(1, dl / 0.4 + 0.3); B.move.set(dx / dl * k, 0, dz / dl * k); }
+  // unstick: if we barely moved for a while, sidestep
+  if (!B.lastPos) B.lastPos = P.pos.clone();
+  B.stuckT = (B.stuckT || 0) + dt;
+  if (B.unstick > 0) { B.unstick -= dt; B.move.set(B.side.x, 0, B.side.z); }
+  else if (B.stuckT > 1.0) {
+    if (B.lastPos.distanceTo(P.pos) < 0.2) {
+      const s = Math.random() < 0.5 ? 1 : -1;
+      B.side = V(-B.move.z * s - B.move.x * 0.4, 0, B.move.x * s - B.move.z * 0.4).normalize();
+      B.unstick = 0.45; B.path = null;
+      if (G.rampage && B.target) { B.skip.set(B.target, G.rtime + 5); B.target = null; }
+    }
+    B.stuckT = 0; B.lastPos.copy(P.pos);
+  }
+}
+
+// ================================================================ handlers + boot
+ui.init({
+  start(mode, opts) { start(mode, opts); },
+  pause() { togglePause(!G.paused); },
+  resume() { togglePause(false); },
+  skipTask() {
+    togglePause(false);
+    if (G.mode === 'story' && STORY[G.scene]) { G.gen++; G.transN++; G.timers.length = 0; G.busy = false; P.controls = true; STORY[G.scene].skip(); }
+  },
+  quit() { togglePause(false); if (G.rampage) { G.rampage = false; } showBill(); },
+  toTitle() { toTitle(); },
+  retry() { ui.bill(null); start(G.mode, G.opts); },
+  elevator(id) { onElevator(id); },
+  action(name, down) { onAction(name, down); },
+  setting(key, val) {
+    if (key === 'sfx' || key === 'bgm') audio.setEnabled({ [key]: !!val });
+    else if (key === 'gender') setPlayerChar(val === 'f' ? 'f' : 'm');
+  },
+});
+P.char = makePlayerChar(ui.settings.gender);
+try { toTitle(); } catch (e) { report(e); }
+requestAnimationFrame(frame);
+
+// ================================================================ debug hook
+if (DEBUG) {
+  _bot = { on: false, move: V(), interact: false, attack: false, kick: false, special: false, path: null, pathI: 0, pathT: 0, goal: V(), target: null, targetT: 0, skip: new Map(), dest: null, forceDest: null };
+  const info = () => { const i = gfx.renderer.info; return { calls: i.render.calls, triangles: i.render.triangles, geometries: i.memory.geometries, textures: i.memory.textures }; };
+  window.__ppg = {
+    G, P, gfx, fx, scene, camera,
+    get errors() { return G.errors; },
+    get fast() { return G.fast; }, set fast(v) { G.fast = !!v; },
+    state() {
+      const S = G.S;
+      const pc = S ? S.phys.counts() : null;
+      return {
+        mode: G.mode, scene: G.scene, phase: G.phase, floor: G.floorKind, preset: G.preset, busy: G.busy, paused: G.paused,
+        stress: Math.round(G.stress), money: Math.round(G.money), timeLeft: G.timeLeft == null ? null : +G.timeLeft.toFixed(2),
+        player: { x: +P.pos.x.toFixed(2), y: +P.y.toFixed(2), z: +P.pos.z.toFixed(2), yaw: +P.yaw.toFixed(2), anim: P.char.anim, face: P.char.face, seated: !!P.seated, carry: P.carryKind, held: P.held ? P.held.type : null },
+        tasks: G.rampage ? G.taskShown.map((t) => t.text + (t.done ? ' ✓' : '')) : (G.storyTasks || []).map((t) => t.text + (t.done ? ' ✓' : '')),
+        focus: G.focus ? G.focus.text : null, objective: G.obj ? { x: +G.obj.pos.x.toFixed(2), z: +G.obj.pos.z.toFixed(2), kind: G.obj.kind || (G.obj.cand ? 'interact' : 'goto'), dest: G.obj.dest || null } : null,
+        bodies: pc, npcs: S ? { total: S.npcs.length, gone: S.npcs.filter((n) => n.gone).length, panicked: S.npcs.filter((n) => n.panicked).length, knocked: S.npcs.reduce((a, n) => a + n.hitCount, 0) } : null,
+        items: [...G.items.values()].length, counts: G.counts, combo: G.combo, special: +G.special.toFixed(2),
+        fps: G.fps, quality: gfx.level, post: gfx.usingPost, render: info(), errors: G.errors.length, rtime: +G.rtime.toFixed(2), bill: G.lastBill || null,
+        floorsBuilt: Object.fromEntries(Object.entries(G.floors).map(([k, s]) => [k, s.buildMs])),
+      };
+    },
+    start(mode, opts) { G.fast = true; return start(mode, opts || {}); },
+    goto(id) {
+      G.fast = true;
+      if (G.mode !== 'story') { G.mode = 'story'; ui.title(false); disposeFloors(); resetDamage(); }
+      ui.bill(null);
+      if (id === 'rampage') {
+        G.gen++; G.transN++; G.timers.length = 0;
+        G.preset = 'sunset'; enterFloor('office'); resetPlayer(); P.pos.copy(G.S.F.anchors.rushSpawn); snapCamera(); setStress(100, false);
+        startRampage(); return true;
+      }
+      if (id === 'bill') { G.gen++; showBill(); return true; }
+      gotoScene(id); return true;
+    },
+    step(n = 1) {
+      G.manual = true;
+      for (let i = 0; i < n; i++) { try { tick(FIXED); } catch (e) { report(e); } }
+      renderNow();
+      return __ppg.state();
+    },
+    realtime() { G.manual = false; last = performance.now(); },
+    auto(on = true) { _bot.on = !!on; _bot.path = null; return _bot.on; },
+    bot: _bot,
+    tp(x, z) { P.pos.set(x, 0, z); P.vel.set(0, 0, 0); placePlayer(); snapCamera(); return [x, z]; },
+    time(p) { applyTime(p); return p; },
+    yaw(a) { CAM.yaw = a; P.yaw = a; updateCamera(0, true); },
+    look(yaw, pitch) { CAM.yaw = yaw; if (pitch != null) CAM.pitch = pitch; CAM.lastLook = G.rtime + 1e6; updateCamera(0, true); renderNow(); },
+    ride(dest) { _bot.forceDest = dest; return dest; },
+    quit() { togglePause(false); G.rampage = false; showBill(); return true; },
+    pause(on = true) { togglePause(!!on); return G.paused; },
+    render() { renderNow(); return info(); },
+    info,
+    quality(l) { gfx.setQuality(l); return gfx.level; },
+  };
+}
