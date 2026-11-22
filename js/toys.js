@@ -256,7 +256,7 @@ export function createToys(api) {
     if (!c.counted && lift > 0.5) {
       c.counted = true;
       api.emit('lift', r);
-      api.addMoney(Math.round(Math.max(20000, r.price * 0.04)), V(x, c.y0 + lift + 1, z), false, true);
+      api.addMoney(Math.round(Math.max(20000, r.price * 0.1) / 1000) * 1000, V(x, c.y0 + lift + 1, z), false, true);
       ui.toast('번쩍! 차를 들어 올렸다', 1600);
       sfx('whoosh', { vol: 0.8, pitch: 0.6 });
     }
@@ -301,7 +301,7 @@ export function createToys(api) {
     P.attackT = 0.32;
     P.swing ^= 1;
     P.char.playOnce(P.swing ? 'punch' : 'punchL');
-    sfx(w === 'jingle' ? 'jingle' : 'whoosh', { vol: 0.6 });
+    sfx(w === 'jingle' ? 'jingle' : 'whooshPunch', { vol: 0.6 });
     after(0.12, () => {
       if (!G.canDamage || !G.S || !P.held) return;
       const held = P.held;
@@ -452,8 +452,9 @@ export function createToys(api) {
     const c = recPos(rec);
     api.emit('carStage', rec, 1, st);
     if (st === 1) {
-      sfx('breakGlass', { vol: 0.95 }); after(0.25, () => sfx('carAlarm', { vol: 0.7 }));
+      sfx('breakGlass', { vol: 0.95 }); sfx('hitMetal', { vol: 0.6 }); after(0.25, () => sfx('carAlarm', { vol: 0.7 }));
       fx.debris(V(c.x, c.y + 0.6, c.z), [0x9fd6ee, 0xcfeefa, 0x5d7e98], 14, 2.6, 0.05);
+      if (fx.shards) fx.shards(V(c.x, c.y + 0.7, c.z), 28, 3, null, 0.05);
       ui.toast(rec.tag === 'bossCar' ? '사장님 차 유리가 와장창!' : '차 유리가 와장창!', 1500);
     } else if (st === 2) {
       sfx('breakMetal', { vol: 0.9 }); fx.debris(c, rec.colors, 14, 3, 0.09);
@@ -529,9 +530,9 @@ export function createToys(api) {
       after(0.08 * i, () => {
         const m = new THREE.Mesh(bar, gm); m.castShadow = true;
         fx.toss(m, V(c.x + f.x * 0.4, 0.5, c.z + f.z * 0.4), V(f.x * rnd(1.5, 3) + rnd(-1, 1), rnd(2, 3.5), f.z * rnd(1.5, 3) + rnd(-1, 1)), 6, S.F.group);
-        api.addMoney(bonus, V(c.x + rnd(-0.5, 0.5), 1.4 + i * 0.1, c.z + rnd(-0.5, 0.5)), false, true);
+        api.addMoney(bonus, V(c.x + rnd(-0.5, 0.5), 1.4 + i * 0.1, c.z + rnd(-0.5, 0.5)), true, true);
         api.addItem('금고 속 금괴', bonus);
-        sfx('coin', { vol: 0.6, pitch: 1 + i * 0.08 });
+        if (i === 5) sfx('bigMoney', { vol: 0.8 }); else sfx('coin', { vol: 0.6, pitch: 1 + i * 0.08 });
       });
     }
     ui.toast('금고가 열렸다! 금괴가 우르르', 1800);
@@ -544,7 +545,8 @@ export function createToys(api) {
     if (bay.body) { S.phys.world.removeBody(bay.body); bay.body = null; }
     const m = new THREE.Matrix4().makeScale(0, 0, 0); W.im.setMatrixAt(bay.i, m); W.im.instanceMatrix.needsUpdate = true;
     const y = (W.y0 + W.y1) / 2;
-    fx.debris(V(bay.x, y, bay.z), [0xcfeefa, 0x9fd6ee, 0xffffff], 16, 2.6, 0.05);
+    fx.debris(V(bay.x, y, bay.z), [0xcfeefa, 0x9fd6ee, 0xffffff], 10, 2.6, 0.05);
+    if (fx.shards) fx.shards(V(bay.x, y, bay.z), 26, 2.8, null, 0.06);
     fx.sparks(V(bay.x, y, bay.z), 8, 3);
     if (!quiet) sfx('breakGlass', { vol: 0.9 });
     api.addMoney(25000, V(bay.x, y + 0.3, bay.z), false, true);

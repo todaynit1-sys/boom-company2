@@ -7,6 +7,15 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const SLEEPING = CANNON.Body.SLEEPING;
 
 export function hpFor(mass) { return clamp(Math.round(Math.sqrt(Math.max(0.1, mass)) * 0.9), 1, 8); }
+// What a thing pays on the bill. Everyday office things (≤ ₩80,000) pay their price; above that the price is
+// compressed logarithmically so one huge item (a ₩15M boss car, a ₩3M vase) is a jackpot of ₩250–330k instead
+// of five times a whole good minute. 120k → 99k · 250k → 135k · 800k → 190k · 3M → 254k · 6M → 287k · 15.4M → 332k
+export const PAY_KNEE = 80000;
+export function payPrice(raw) {
+  raw = Math.max(0, raw || 0);
+  if (raw <= PAY_KNEE) return Math.round(raw);
+  return Math.round(PAY_KNEE * (1 + 0.6 * Math.log(raw / PAY_KNEE)) / 1000) * 1000;
+}
 
 export function createPhys(F) {
   const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -13, 0), allowSleep: true });
@@ -59,7 +68,7 @@ export function createPhys(F) {
       const hpMax = sp && sp.hp ? sp.hp : fixed && prop.mass <= 0 ? clamp(Math.round(Math.sqrt(Math.max(1, prop.price) / 20000)), 2, 10) : hpFor(prop.mass);
       const rec = {
         id: records.length, sp, prop, type: prop.type, name: prop.name, group: prop.group, body, hx, hy, hz,
-        mass: prop.mass, price: prop.price, material: prop.material, colors: prop.colors,
+        mass: prop.mass, price: payPrice(prop.price), rawPrice: prop.price || 0, material: prop.material, colors: prop.colors,
         hp: hpMax, hpMax, paid: 0, destroyed: false, wrecked: false, flipped: false, held: false, removed: false,
         heavy: prop.mass >= HEAVY && !fixed, tag, energized: 0, cool: 0, awakeLast: false, solid: false, kicked: false,
         fixed, hang: !!(sp && sp.hang), riding: false, stage: 0,

@@ -11,7 +11,10 @@ const [scenarioPath, outDir, size = '1280x720', query = ''] = process.argv.slice
 mkdirSync(outDir, { recursive: true });
 const [W, H] = size.split('x').map(Number);
 const mobile = Math.min(W, H) < 600;
-const port = 9400 + Math.floor(Math.random() * 400);
+// PPG_BASE (default http://localhost:4260) picks the static server; PPG_CDP_BASE moves the DevTools port range
+// so several drivers (worktrees, agents) can run Chrome at once
+const BASE = (process.env.PPG_BASE || 'http://localhost:4260').replace(/\/$/, '');
+const port = (+process.env.PPG_CDP_BASE || 9400) + Math.floor(Math.random() * 400);
 const prof = mkdtempSync(join(process.env.SCRATCH || tmpdir(), 'cdp-'));
 const chrome = spawn('C:/Program Files/Google/Chrome/Application/chrome.exe', [
   '--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
@@ -41,7 +44,7 @@ const send = (method, params = {}) => new Promise((r) => { const i = ++id; pend.
 await send('Runtime.enable'); await send('Page.enable'); await send('Log.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile });
 if (mobile) await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-const url = `http://localhost:4260/${query ? '?' + query : ''}#debug`;
+const url = `${BASE}/${query ? '?' + query : ''}#debug`;
 await send('Page.navigate', { url });
 
 async function ev(expr, timeout = 120000) {
@@ -64,7 +67,7 @@ async function step(n, chunk = 30) {
   return s;
 }
 // wait for boot
-for (let i = 0; i < 100; i++) { const ok = await ev('!!window.__ppg').catch(() => false); if (ok) break; await sleep(300); }
+for (let i = 0; i < 200; i++) { const ok = await ev('!!window.__ppg').catch(() => false); if (ok) break; await sleep(300); }
 const mod = await import(pathToFileURL(resolve(scenarioPath)).href);
 let failed = false;
 try { await mod.default({ ev, shot, sleep, log, step, W, H, send, outDir }); }

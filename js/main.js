@@ -65,7 +65,12 @@ function runTimers() {
 }
 
 // ================================================================ audio helpers
-function sfx(name, o) { audio.sfx(name, o); }
+// every sound goes through here; with #debug the last 160 names are kept for tests (__ppg.sfxLog())
+const SFX_LOG = [], SFX_COUNT = {};
+function sfx(name, o) {
+  audio.sfx(name, o);
+  if (DEBUG) { SFX_COUNT[name] = (SFX_COUNT[name] || 0) + 1; SFX_LOG.push({ n: name, t: +G.rtime.toFixed(3), f: G.frames, at: o && o.at != null ? o.at : undefined, p: o && o.pitch != null ? +o.pitch.toFixed(3) : undefined }); if (SFX_LOG.length > 160) SFX_LOG.shift(); }
+}
 function vibrate(ms) { try { if (TOUCH && ui.settings.vibe && navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) navigator.vibrate(ms); } catch (e) { /* ignore */ } }
 let audioReady = false;
 function initAudio() {
@@ -308,18 +313,22 @@ function enterFloor(kind, { at = null, yaw = null, elevator = null } = {}) {
   S.phys.onImpact = onImpact;
   gfx.fit(S.F.bounds, S.F.ceilY);
   applyTime(G.preset);
+  let arriving = null;
   if (elevator != null) {
     const ev = S.F.elevators[elevator] || S.F.elevators[0];
-    // step out of the car: stand just outside the opening doors, facing the room
-    P.pos.copy(ev.front).addScaledVector(ev.fwd, 0.55);
+    // arrive inside the car just behind the opening doors, facing the room; the player then steps out on their
+    // own (see updatePlayer → G.arrive) while the camera, still in the cabin behind them, dollies out
+    P.pos.copy(ev.front).addScaledVector(ev.fwd, -0.42);
     P.yaw = Math.atan2(ev.fwd.x, ev.fwd.z);
-    ev.open = 0.35; ev.hold = 1.6; ev.dismissed = true;
+    ev.open = 0.8; ev.hold = 2.2; ev.dismissed = true;
+    arriving = ev;
     after(0.1, () => sfx('ding', { vol: 0.6 }));
   } else if (at) { P.pos.set(at.x, 0, at.z); if (yaw != null) P.yaw = yaw; }
   P.y = 0; P.vy = 0; P.onGround = true; P.vel.set(0, 0, 0);
+  G.arrive = arriving ? { ev: arriving, t: 0, to: arriving.front.clone().addScaledVector(arriving.fwd, 1.5) } : null;
   placePlayer();
   snapCamera();
-  if (elevator != null) { CAM.yaw = P.yaw + 0.85; updateCamera(0, true); }
+  if (arriving) { CAM.pitch = ARRIVE_PITCH; updateCamera(0, true); }
   toys.prep(S);
   floorHook(S, 'onEnter');
   return S;
@@ -343,7 +352,9 @@ function applyTime(name) {
 }
 
 // ================================================================ camera
-const CAM = { yaw: PI, pitch: 0.3, dist: 3.7, tgt: V(), pos: V(), lastLook: -99, mode: 'follow', drift: 0, occ: 1 };
+const CAM = { yaw: PI, pitch: 0.3, dist: 3.7, tgt: V(), pos: V(), lastLook: -99, mode: 'follow', drift: 0, occ: 1, cabin: false, blend: 0, prev: V(), shakeOff: 0 };
+const ARRIVE_PITCH = 0.1; // level look out of the elevator car
+const basePitch = () => (innerWidth < innerHeight ? 0.44 : 0.3);
 function camDist() { const portrait = innerWidth < innerHeight; return (portrait ? 4.9 : 3.75) + (G.S && G.S.F.ceilY > 3.6 ? 0.25 : 0) + (toys && toys.riding() && toys.T.ride.kind === 'forklift' ? 1.0 : 0); }
 function snapCamera() {
   CAM.yaw = P.yaw; CAM.pitch = innerWidth < innerHeight ? 0.44 : 0.3;
@@ -354,8 +365,8 @@ const _cv = V(), _cl = V();
 function updateCamera(dt, snap = false) {
   const portrait = innerWidth < innerHeight;
   const fov = portrait ? 70 : 55;
-  if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
   if (G.mode === 'title' && G.S) {
+    if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
     const tc = G.S.F.anchors.titleCam;
     CAM.drift += dt;
     const a = Math.sin(CAM.drift * 0.12) * 0.35;
@@ -379,6 +390,12 @@ function updateCamera(dt, snap = false) {
     if (Math.abs(d) < 2.3) CAM.yaw += d * Math.min(1, dt * 1.5);
   }
   if (P.seated && !snap && G.rtime - CAM.lastLook > 1.3) CAM.yaw = angLerp(CAM.yaw, P.yaw, dt * 2);
+  // stepping out of an elevator: stay behind the player, level, then ease back to the normal pitch
+  let arrK = 0;
+  if (G.arrive) {
+    arrK = 1 - clamp(G.arrive.t / 1.1, 0, 1);
+    if (G.rtime - CAM.lastLook > 0.05 || snap) { CAM.yaw = angLerp(CAM.yaw, P.yaw, snap ? 1 : dt * 6); CAM.pitch = ARRIVE_PITCH + (basePitch() - ARRIVE_PITCH) * (1 - arrK) * (1 - arrK); }
+  }
   const dist = camDist();
   const ty = P.seated ? 1.05 : 1.25 + P.y * 0.5;
   _cv.set(P.pos.x, ty, P.pos.z);
@@ -386,9 +403,28 @@ function updateCamera(dt, snap = false) {
   const fx = Math.sin(CAM.yaw), fz = Math.cos(CAM.yaw);
   const cp = Math.cos(CAM.pitch), spch = Math.sin(CAM.pitch);
   const pos = _cl.set(CAM.tgt.x - fx * dist * cp, CAM.tgt.y + dist * spch, CAM.tgt.z - fz * dist * cp);
-  // keep inside the room (and out of pillars / walls)
   const F = G.S && G.S.F;
-  if (F) {
+  // a camera that would sit behind a wall in an elevator doorway goes into the car instead (over the shoulder,
+  // below the car ceiling) — no wall clamp / occlusion pull-in there, which used to park it in the doorway
+  // looking down at the floor
+  const wasCabin = CAM.cabin;
+  CAM.cabin = false;
+  if (F) for (const ev of F.elevators) {
+    const ax = pos.x - ev.front.x, az = pos.z - ev.front.z;
+    const along = ax * ev.fwd.x + az * ev.fwd.z;
+    if (along > 0.25) continue;
+    const pa = (P.pos.x - ev.front.x) * ev.fwd.x + (P.pos.z - ev.front.z) * ev.fwd.z, pl = (P.pos.x - ev.front.x) * ev.right.x + (P.pos.z - ev.front.z) * ev.right.z;
+    if (pa < -1.5 || pa > 4.5 || Math.abs(pl) > 0.95) continue; // player in the car or in front of its doors
+    let lat = ax * ev.right.x + az * ev.right.z;
+    const a = clamp(along, -1.2, 0.25);
+    lat = clamp(lat, -0.34, 0.34);
+    pos.x = ev.front.x + ev.fwd.x * a + ev.right.x * lat; pos.z = ev.front.z + ev.fwd.z * a + ev.right.z * lat;
+    pos.y = clamp(pos.y, 1.25, 1.95);
+    CAM.cabin = true;
+    break;
+  }
+  // keep inside the room (and out of pillars / walls)
+  if (F && !CAM.cabin) {
     const b = F.bounds, inside = P.pos.x > b.minX && P.pos.x < b.maxX;
     if (inside) { pos.x = clamp(pos.x, b.minX + 0.25, b.maxX - 0.25); pos.z = clamp(pos.z, b.minZ + 0.25, b.maxZ - 0.25); }
     pos.y = clamp(pos.y, 0.35, F.ceilY - 0.22);
@@ -415,13 +451,31 @@ function updateCamera(dt, snap = false) {
     const close = Math.hypot(pos.x - CAM.tgt.x, pos.z - CAM.tgt.z);
     if (close < 1.7) pos.y = Math.min(F.ceilY - 0.22, Math.max(pos.y, CAM.tgt.y + (1.7 - close) * 0.55));
   }
+  // switching between "in the car" and "in the room" glides instead of jumping
+  if (!snap && wasCabin !== CAM.cabin) CAM.blend = 0.4;
+  if (CAM.blend > 0 && !snap) { CAM.blend -= dt; pos.lerpVectors(CAM.prev, pos, Math.min(1, dt * 9)); }
+  CAM.prev.copy(pos);
   CAM.pos.copy(pos);
   camera.position.copy(pos);
-  if (G.shake > 0.001) {
-    const s = G.shake * (ui.settings.calm ? 0.3 : 1);
-    camera.position.x += rnd(-1, 1) * s * 0.12; camera.position.y += rnd(-1, 1) * s * 0.1; camera.position.z += rnd(-1, 1) * s * 0.12;
+  // ---- feel: trauma shake (squared, smooth noise), directional kick, roll, FOV punch
+  const calmK = ui.settings.calm ? 0.25 : 1;
+  const tr = Math.min(1, G.shake), k = tr * tr * calmK;
+  const ns = G.rtime * 31;
+  let ox = 0, oy = 0, oz = 0;
+  if (k > 1e-4) {
+    ox = (Math.sin(ns * 1.13) + Math.sin(ns * 2.71 + 1.3) * 0.5) * k * 0.15;
+    oy = (Math.sin(ns * 1.37 + 2.1) + Math.sin(ns * 3.07) * 0.5) * k * 0.11;
+    oz = (Math.sin(ns * 0.97 + 4.2) + Math.sin(ns * 2.33 + 0.7) * 0.5) * k * 0.15;
   }
-  camera.lookAt(CAM.tgt.x + fx * 1.1, CAM.tgt.y - 0.12, CAM.tgt.z + fz * 1.1);
+  ox += FEEL.kick.x; oy += FEEL.kick.y; oz += FEEL.kick.z;
+  camera.position.x += ox; camera.position.y += oy; camera.position.z += oz;
+  if (F) camera.position.y = Math.min(camera.position.y, F.ceilY - 0.12);
+  CAM.shakeOff = Math.hypot(ox, oy, oz);
+  const ahead = 1.1 + (CAM.cabin ? 1.4 : 0) + arrK * 1.0;
+  camera.lookAt(CAM.tgt.x + fx * ahead + FEEL.kick.x * 0.5, CAM.tgt.y - 0.12 + (CAM.cabin ? 0.12 : 0) + FEEL.kick.y * 0.5, CAM.tgt.z + fz * ahead + FEEL.kick.z * 0.5);
+  if (k > 1e-4 && !ui.settings.calm) camera.rotateZ(Math.sin(ns * 0.83 + 0.4) * k * 0.05);
+  const wantFov = fov + FEEL.fov;
+  if (Math.abs(camera.fov - wantFov) > 0.01) { camera.fov = wantFov; camera.updateProjectionMatrix(); }
 }
 
 // ================================================================ HUD helpers
@@ -453,6 +507,69 @@ function toScreen(v) {
   _pv.copy(v).project(camera);
   if (_pv.z > 1 || _pv.z < -1 || _pv.x < -1.3 || _pv.x > 1.3 || _pv.y < -1.3 || _pv.y > 1.3) return null;
   return { x: (_pv.x * 0.5 + 0.5) * innerWidth, y: (-_pv.y * 0.5 + 0.5) * innerHeight };
+}
+
+// ================================================================ game feel
+// hit-stop (game clock nearly frozen, real clock runs: deterministic under __ppg.step), trauma shake + a
+// directional camera kick (updateCamera), FOV punch, slow-mo, squash-and-stretch pops on struck props.
+// Calm mode (흔들림 약하게): shake ×0.25 and no roll, no kick/FOV punch beyond a nudge, no flashes, hit-stop ≤ 30 ms.
+const HITSTOP = { punch: 0.035, kick: 0.06, break: 0.06, crash: 0.11, flip: 0.11, special: 0.16 };
+const FEEL = { kick: V(), fov: 0, pops: Array.from({ length: 18 }, () => ({ rec: null, t: 0, a: 0, bx: 1, by: 1, bz: 1 })), hs: [], big: 0 };
+const isCalm = () => !!ui.settings.calm;
+function hitStop(kind) {
+  let s = typeof kind === 'number' ? kind : HITSTOP[kind] || 0;
+  if (isCalm()) s = Math.min(s, 0.03);
+  if (s <= 0) return;
+  if (s > G.hitStop) G.hitStop = s;
+  if (DEBUG) { FEEL.hs.push({ kind, s, f: G.frames }); if (FEEL.hs.length > 60) FEEL.hs.shift(); }
+}
+function shake(t) { G.shake = Math.min(1.25, Math.max(G.shake, t)); }
+function camKick(dir, amt) {
+  if (isCalm()) amt *= 0.3;
+  FEEL.kick.x += dir.x * amt; FEEL.kick.z += dir.z * amt; FEEL.kick.y -= amt * 0.3;
+  FEEL.kick.clampLength(0, 0.42);
+}
+function fovPunch(deg) { if (!isCalm()) FEEL.fov = Math.max(FEEL.fov, deg); }
+function slowMo(sec = 0.3, scale = 0.4) {
+  if (!(G.slowT > 0 && G.slowScale < scale)) G.slowScale = scale; // a deeper slow already running keeps its depth
+  G.slowT = Math.max(G.slowT, sec);
+}
+// the biggest destructions: desk flip landing, car wreck, safe open, water tank burst, the special
+function bigMoment(stop = 'crash', fov = 7) {
+  hitStop(stop); slowMo(0.3, 0.4); fovPunch(fov); shake(1.0);
+  if (!isCalm()) ui.flash('#fff0c0', 150);
+  vibrate(70);
+  FEEL.big++;
+}
+// squash-and-stretch on a struck prop (scales its group around its bottom; animated on the real clock so it
+// reads during a hit-stop)
+function popRec(rec, a) {
+  if (!rec || rec.removed || rec.held || a <= 0) return;
+  let e = null;
+  for (const p of FEEL.pops) { if (p.rec === rec) { e = p; break; } if (!e && !p.rec) e = p; }
+  if (!e) return;
+  if (e.rec !== rec) {
+    if (rec.inst) rec.inst(rec);
+    const s = rec.group.scale; e.rec = rec; e.bx = s.x; e.by = s.y; e.bz = s.z;
+  }
+  e.t = 0; e.a = Math.min(0.32, a);
+}
+function updatePops(dt) {
+  for (const e of FEEL.pops) {
+    const r = e.rec;
+    if (!r) continue;
+    e.t += dt;
+    const g = r.group;
+    if (r.removed || r.held || e.t > 0.36) { g.scale.set(e.bx, e.by, e.bz); if (!g.matrixAutoUpdate) g.updateMatrix(); e.rec = null; continue; }
+    const k = e.a * Math.exp(-e.t * 10) * Math.cos(e.t * 30); // squash first, then a springy stretch
+    g.scale.set(e.bx * (1 + k * 0.55), e.by * (1 - k), e.bz * (1 + k * 0.55));
+    if (!g.matrixAutoUpdate) g.updateMatrix();
+  }
+}
+function feelTick(rdt) {
+  FEEL.kick.multiplyScalar(Math.exp(-rdt * 11));
+  FEEL.fov *= Math.exp(-rdt * 5.5); if (FEEL.fov < 0.02) FEEL.fov = 0;
+  updatePops(rdt);
 }
 
 // ================================================================ story scenes
@@ -972,25 +1089,46 @@ const DEFAULT_CHALLENGES = [
   { id: 'd3', text: '필살기 쓰기', kind: 'count', key: 'special', bonus: 40000 },
 ];
 function chalKey(c) { return c.kind === 'count' ? c.key : c.kind + (c.tag ? '#' + c.tag : c.type ? ':' + c.type : ''); }
-// tiers for a person playing one minute (≈0.6–1.2M won); the scripted bot does ~2.5–3M
+// Bill tiers for one minute of rampage (rush / story). Prices are compressed above ₩80k (phys.js → payPrice), so
+// a person lands ≈ ₩0.5–1.3M on any floor, a good run ₩1.5–2M; the scripted bot does ≈ ₩1.5–2.5M.
+// Free mode ranks the same tiers on damage per minute played (min. one minute) — see showBill().
 const RANKS = [
   [0, '모범 사원', '부순 게 거의 없네요. 내일도 출근하실 거죠?'],
-  [50000, '소심한 반항아', '키보드 하나에도 손이 떨렸군요.'],
-  [180000, '탕비실 파괴자', '부장님 머그컵의 명복을 빕니다.'],
-  [420000, '부서 해체 전문가', '인사팀이 조직도를 다시 그리는 중이에요.'],
-  [850000, '인간 태풍', '관리팀이 보험 약관을 읽기 시작했어요.'],
-  [1500000, '전설의 퇴사 예정자', '사내 게시판에 당신 이름이 올라왔어요.'],
-  [2400000, '회사 뿌개기 장인', '건물주가 직접 전화를 걸어 왔습니다.'],
+  [60000, '소심한 반항아', '키보드 하나에도 손이 떨렸군요.'],
+  [200000, '탕비실 파괴자', '부장님 머그컵의 명복을 빕니다.'],
+  [450000, '부서 해체 전문가', '인사팀이 조직도를 다시 그리는 중이에요.'],
+  [800000, '인간 태풍', '관리팀이 보험 약관을 읽기 시작했어요.'],
+  [1300000, '전설의 퇴사 예정자', '사내 게시판에 당신 이름이 올라왔어요.'],
+  [2000000, '회사 뿌개기 장인', '건물주가 직접 전화를 걸어 왔습니다.'],
 ];
+const RELIEF_K = 330000; // stress relief = 1 − e^(−money / K): ₩0.5M → 78%, ₩0.8M → 91%, ₩1.3M → 98%
+const BIG_MONEY = 25000; // a tick paying this much rings 'bigMoney' instead of 'coin' (windows, laptops, TVs, gates, cars… a few times a minute)
+const CHAL_BONUS_TOTAL = 420000; // a floor's six challenge bonuses are scaled down to this sum at most
+// car payout by damage stage (cumulative share of its price: glass, dents, wheel off; the wreck pays the rest)
+const CAR_STAGE_PAY = [0, 0.15, 0.35, 0.6];
 const DESKS = new Set(['desk', 'deskL', 'meetingTable', 'roundTable', 'grilltable', 'podium', 'ceoDesk']);
 const flippable = (r) => DESKS.has(r.type) || !!(r.sp && r.sp.flip);
-const PAPERY = new Set(['desk', 'deskL', 'printer', 'paperStack', 'binders', 'binderStack', 'paperBox', 'shelf', 'cabinet', 'cabinetTall', 'whiteboard', 'meetingTable']);
-const BREAK_SFX = { wood: 'breakWood', glass: 'breakGlass', metal: 'breakMetal', plastic: 'breakPlastic', ceramic: 'breakCeramic' };
+const PAPERY = new Set(['desk', 'deskL', 'printer', 'paperStack', 'binders', 'binderStack', 'paperBox', 'shelf', 'cabinet', 'cabinetTall', 'whiteboard', 'meetingTable', 'bookcase', 'ceoDesk', 'box', 'parcel', 'infoDesk', 'directory', 'podium']);
+// sound by material; types that need something else override it (TYPE_*: null = the toy reaction plays its own)
 const HIT_SFX = { wood: 'hitWood', glass: 'hitGlass', metal: 'hitMetal', plastic: 'hitPlastic', soft: 'hitSoft', paper: 'hitPaper', ceramic: 'hitCeramic', plant: 'hitPlant' };
+const BREAK_SFX = { wood: 'breakWood', glass: 'breakGlass', metal: 'breakMetal', plastic: 'breakPlastic', ceramic: 'breakCeramic', soft: 'hitSoft', paper: 'paper', plant: 'breakCeramic' };
+const TYPE_HIT = { balloon: 'hitSoft', tireStack: 'hitSoft', car: 'hitMetal', forklift: 'hitMetal' };
+const TYPE_BREAK = { balloon: null, ceoSafe: null, car: 'crash', aquarium: 'breakGlass', sojuFridge: 'breakGlass', watertank: 'breakPlastic', drum: 'breakMetal', alarmBell: 'breakMetal', forklift: 'breakMetal' };
+const BIG_MOMENT = new Set(['car', 'ceoSafe', 'watertank', 'aquarium']);
+const hitSfxName = (r) => TYPE_HIT[r.type] || HIT_SFX[r.material] || 'hitPlastic';
 
 function resetDamage() {
   G.money = 0; G.items = new Map(); G.combo = 0; G.comboT = 0; G.special = 0; G.counts = {}; G.fcounts = {}; G.chal = {};
+  G.playT = 0;
   ui.combo(0); ui.special(0);
+}
+function bumpCombo() {
+  G.combo++; G.comboT = 1.5; ui.combo(G.combo);
+  if (G.combo % 10 === 0) {
+    sfx('comboUp', { vol: 0.7, pitch: 1 + Math.min(G.combo / 10, 8) * 0.06 });
+    ui.banner(`연타 x${G.combo}!`, '', 900);
+    if (DEBUG) G.comboMiles = (G.comboMiles || []).concat([G.combo]);
+  }
 }
 function startRampage() {
   G.scene = G.mode === 'free' ? 'free' : 'rampage';
@@ -1019,7 +1157,10 @@ function initTasks(kind) {
   let C = G.chal[kind];
   if (!C) {
     const spec = FLOOR_BY_ID[kind];
-    let pool = ((spec && spec.challenges && spec.challenges.length ? spec.challenges : DEFAULT_CHALLENGES)).map((t) => Object.assign({ done: false, doneAt: 0, need: t.n || 1, key: chalKey(t) }, t, { key: chalKey(t) }));
+    const src = spec && spec.challenges && spec.challenges.length ? spec.challenges : DEFAULT_CHALLENGES;
+    // bonuses in proportion to the bill: a floor's six together pay at most CHAL_BONUS_TOTAL
+    const sum = src.reduce((a, t) => a + (t.bonus || 0), 0), bk = sum > CHAL_BONUS_TOTAL ? CHAL_BONUS_TOTAL / sum : 1;
+    let pool = src.map((t) => Object.assign({ done: false, doneAt: 0, need: t.n || 1, key: chalKey(t) }, t, { key: chalKey(t), bonus: Math.round((t.bonus || 0) * bk / 1000) * 1000 }));
     // rotate the order a little so runs differ
     const k = (Math.random() * Math.min(3, pool.length)) | 0;
     pool = pool.slice(k).concat(pool.slice(0, k));
@@ -1041,7 +1182,7 @@ function checkTasks() {
       addMoney(t.bonus, null, true);
       addItem('목표 보너스 · ' + t.text, t.bonus);
       ui.toast(`${t.text} 달성! 보너스 +${fmt(t.bonus)}원`, 2000);
-      sfx('check', { vol: 0.8 });
+      sfx('bonus', { vol: 0.8 });
     }
   }
   for (let i = 0; i < G.taskShown.length; i++) {
@@ -1077,20 +1218,28 @@ function addMoney(amt, worldPos, quiet = false, charge = false) {
   if (amt <= 0) return;
   G.money += amt;
   ui.money(G.money, G.rampage || G.mode !== 'story' ? '피해 총액' : '피해액');
-  if (worldPos) { const s = toScreen(worldPos); if (s) ui.moneyPop(s.x, s.y, amt); }
-  if (!quiet) sfx('coin', { vol: 0.45, pitch: 1 + Math.min(G.combo, 16) * 0.045 });
+  if (worldPos) { const s = toScreen(worldPos); if (s) ui.moneyPop(s.x, s.y, amt, G.combo); }
+  if (!quiet) G.payAcc = (G.payAcc || 0) + amt; // one cha-ching per tick, sized by the tick's total (payCue)
   if (charge) G.special = Math.min(1, G.special + amt / 380000);
   if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); }
   ui.special(G.special);
   // stress drains as damage accumulates (that is the relief)
-  const relief = 100 * (1 - Math.exp(-G.money / 400000)); // ~90% after a good human minute (~900k)
+  const relief = 100 * (1 - Math.exp(-G.money / RELIEF_K));
   setStress(100 - relief, false);
+}
+// a hit's share + the break's rest land in the same tick: ring once, bigMoney when the tick paid ≥ BIG_MONEY
+function payCue() {
+  const amt = G.payAcc || 0;
+  if (amt <= 0) return;
+  G.payAcc = 0;
+  if (amt >= BIG_MONEY) sfx('bigMoney', { vol: 0.75, pitch: 1 + Math.min(G.combo, 16) * 0.02 });
+  else sfx('coin', { vol: 0.45, pitch: 1 + Math.min(G.combo, 16) * 0.045 });
 }
 function alarmAt(pos, rad = 9) {
   const ctx = npcCtx();
   for (const n of G.S.npcs) if (!n.gone && n.pos.distanceTo(pos) < rad) n.alarm(ctx, pos);
 }
-const _c = V(), _d = V();
+const _c = V(), _d = V(), _cp = V();
 function recPos(r, out = V()) { const p = r.body.position; return out.set(p.x, p.y, p.z); }
 function hitRec(rec, dmg, dir, power, opts = {}) {
   const S = G.S, b = rec.body;
@@ -1100,19 +1249,22 @@ function hitRec(rec, dmg, dir, power, opts = {}) {
   // fixtures don't move; cars only rock (their wreck is staged, see toys.js); a ridden thing is driven
   if (rec.fixed || rec.riding || rec.type === 'car') power = 0;
   b.wakeUp();
-  if (power > 0) {
-    const m = Math.max(0.3, rec.mass);
-    const dv = power * clamp(2.4 / Math.sqrt(m / 4), 0.22, 3.2);
-    b.velocity.x += dir.x * dv; b.velocity.z += dir.z * dv; b.velocity.y += dv * 0.45 + (rec.mass < 20 ? 1.2 : 0.4);
-    b.angularVelocity.x += rnd(-1, 1) * dv * 2; b.angularVelocity.y += rnd(-1, 1) * dv * 2; b.angularVelocity.z += rnd(-1, 1) * dv * 2;
-    S.phys.wakeNear(b.position.x, b.position.y, b.position.z, Math.max(rec.hx, rec.hz) + 0.3, rec);
-  }
+  if (power > 0) launch(rec, dir, power);
   rec.energized = S.phys.time + 2.5;
   const c = recPos(rec, _c);
-  fx.sparks(c, opts.big ? 14 : 8, 4);
-  fx.debris(c, rec.colors, opts.big ? 8 : 4, 2.2, Math.min(0.09, 0.03 + Math.cbrt(rec.mass) * 0.012));
-  if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.3, c.z), rec.type === 'printer' ? 5 : 3, 1.8));
-  sfx(HIT_SFX[rec.material] || 'hitPlastic', { vol: opts.vol || 0.8, pitch: rnd(0.9, 1.1) });
+  const direct = !!opts.direct;
+  // contact point: the struck face, toward the hitter
+  const ext = Math.min(0.5, Math.max(rec.hx, rec.hz)) * 0.7;
+  const cp = _cp.set(c.x - dir.x * ext, clamp(c.y + 0.05, 0.3, 1.7), c.z - dir.z * ext);
+  if (direct) fx.impact(cp, (opts.kick ? 1.15 : 0.85) * (rec.mass > 30 ? 1.25 : 1), !isCalm());
+  const chunk = Math.min(0.1, 0.035 + Math.cbrt(Math.max(0.3, rec.mass)) * 0.014);
+  if (rec.material === 'metal') fx.sparks(cp, opts.big ? 22 : 14, 5.5, dir, 1.4);
+  else if (direct) fx.sparks(cp, 5, 3, dir);
+  if (rec.material === 'glass') fx.shards(cp, opts.big ? 14 : 8, 2.4, dir, 0.04);
+  fx.debris(c, rec.colors, opts.big ? 10 : 6, 2.6, chunk, dir.lengthSq() > 0.01 ? dir : null);
+  if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.3, c.z), rec.type === 'printer' ? 6 : 3, 2.0));
+  sfx(hitSfxName(rec), { vol: opts.vol || 0.8, pitch: rnd(0.9, 1.1) });
+  popRec(rec, direct ? (opts.kick ? 0.26 : 0.18) : power > 0 || dmg > 0 ? 0.1 : 0);
   if (rec.type === 'chair' && !rec.kicked) { rec.kicked = true; count('chairHit'); }
   if (rec.type === 'cafeChair' && !rec.kicked) { rec.kicked = true; count('cafeChairHit'); }
   if ((rec.type === 'sofa' || rec.type === 'sofaYellow') && !rec.kicked) { rec.kicked = true; count('sofaHit'); }
@@ -1122,18 +1274,51 @@ function hitRec(rec, dmg, dir, power, opts = {}) {
   if (!rec.destroyed) {
     const before = rec.hp;
     rec.hp -= dmg;
-    const share = rec.price * 0.5;
-    const amt = Math.min(Math.round(share * Math.min(dmg, before) / rec.hpMax), Math.max(0, Math.round(share) - rec.paid));
+    if (direct) bumpCombo();
+    if (dmg > 0) toys.afterHit(rec); // (car: updates its damage stage first — the car pays by stage)
+    let amt;
+    if (rec.type === 'car') amt = Math.max(0, Math.round(rec.price * CAR_STAGE_PAY[clamp(rec.stage | 0, 0, 3)]) - rec.paid);
+    else {
+      const share = rec.price * 0.5;
+      amt = Math.min(Math.round(share * Math.min(dmg, before) / rec.hpMax), Math.max(0, Math.round(share) - rec.paid));
+    }
     rec.paid += amt;
-    if (opts.direct) { G.combo++; G.comboT = 1.5; ui.combo(G.combo); }
-    if (amt > 0) addMoney(amt, V(c.x, c.y + rec.hy + 0.2, c.z), false, !!opts.direct);
-    if (dmg > 0) toys.afterHit(rec);
-    if (rec.hp <= 0) destroyRec(rec, dir, { charge: !!opts.direct });
+    if (amt > 0) addMoney(amt, V(c.x, c.y + rec.hy + 0.2, c.z), false, direct);
+    if (rec.hp <= 0) destroyRec(rec, dir, { charge: direct });
   }
   alarmAt(c, 9);
-  if (opts.shake !== false) G.shake = Math.max(G.shake, 0.18 + Math.min(0.6, rec.mass / 120));
-  if (rec.mass > 10 && opts.direct) G.hitStop = Math.max(G.hitStop, 0.05);
-  if (opts.direct) vibrate(rec.mass > 10 ? 25 : 12);
+  if (opts.shake !== false) shake((direct ? 0.24 : 0.14) + Math.min(0.5, rec.mass / 150) + (opts.kick ? 0.1 : 0));
+  if (direct) {
+    // a break / big break on this very hit already set a longer stop in destroyRec
+    hitStop(opts.kick || opts.big ? 'kick' : 'punch');
+    camKick(dir, opts.kick ? 0.17 : 0.1);
+    vibrate(rec.mass > 10 ? 25 : 12);
+  }
+}
+// impulse from a hit: horizontal speed falls with mass (a kicked chair skids across the room, a punched monitor
+// leaves the desk, a printer only shifts), plus a hop and a forward tumble
+function launch(rec, dir, power) {
+  const S = G.S, b = rec.body, m = clamp(rec.mass, 0.15, 160), light = m < 20;
+  const vh = clamp(power * 4.6 / Math.pow(Math.max(0.2, m) / 5, 0.45), 0.25, 9);
+  b.velocity.x += dir.x * vh; b.velocity.z += dir.z * vh;
+  b.velocity.y += light ? 1.3 + vh * 0.3 : 0.4 + vh * 0.12;
+  // tumble forward (axis = up × dir) + wobble; rolling things (chairs, carts) skid and spin instead
+  const roll = !!RIDE[rec.type];
+  const spin = vh * (roll ? 0.25 : light ? 2.2 : 1.0);
+  b.angularVelocity.x += dir.z * spin + rnd(-1, 1) * spin * 0.35;
+  b.angularVelocity.y += rnd(-1, 1) * (roll ? vh * 1.4 : spin * 0.5);
+  b.angularVelocity.z += -dir.x * spin + rnd(-1, 1) * spin * 0.35;
+  S.phys.wakeNear(b.position.x, b.position.y, b.position.z, Math.max(rec.hx, rec.hz) + 0.3, rec);
+}
+function breakSfx(rec) {
+  if (rec.prop.floats) return false;
+  const n = rec.type in TYPE_BREAK ? TYPE_BREAK[rec.type] : BREAK_SFX[rec.material] || 'breakPlastic';
+  if (n) sfx(n, { vol: 0.85, pitch: rnd(0.92, 1.08) });
+  if (n === 'paper') sfx('hitPaper', { vol: 0.7 });
+  if (rec.material === 'plant') sfx('hitPlant', { vol: 0.7 });
+  const big = rec.type === 'car' || rec.mass >= 35 || rec.price >= 100000 || (rec.fixed && rec.hpMax >= 4);
+  if (big && n !== 'crash') sfx('crash', { vol: 0.7, pitch: rnd(0.9, 1.05) });
+  return big;
 }
 function destroyRec(rec, dir, { flip = false, charge = false } = {}) {
   if (rec.destroyed) return;
@@ -1151,12 +1336,20 @@ function destroyRec(rec, dir, { flip = false, charge = false } = {}) {
   if (rec.type === 'mug') count('coffee');
   let keepLook = false;
   if (!flip) {
-    sfx(BREAK_SFX[rec.material] || 'crash', { vol: 0.85, pitch: rnd(0.92, 1.08) });
-    fx.debris(c, rec.colors, rec.mass > 15 ? 16 : 10, 3, Math.min(0.12, 0.035 + Math.cbrt(Math.max(1, rec.mass)) * 0.015));
-    fx.sparks(c, 12, 5);
-    if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.4, c.z), 6, 2.4));
+    const big = breakSfx(rec);
+    const d = dir && dir.lengthSq() > 0.01 ? dir : null;
+    const heavy = rec.mass > 15 || rec.fixed;
+    fx.debris(c, rec.colors, heavy ? 24 : 14, 3.4, Math.min(0.14, 0.045 + Math.cbrt(Math.max(1, rec.mass)) * 0.018), d);
+    if (rec.material === 'metal') fx.sparks(c, 26, 6.5, d, 1.5);
+    else fx.sparks(c, 8, 4.5, d);
+    if (rec.material === 'glass') fx.shards(V(c.x, c.y + rec.hy * 0.5, c.z), heavy ? 30 : 18, 3, d, heavy ? 0.06 : 0.045);
+    if (heavy) fx.dustRing(c, Math.min(1.4, 0.5 + Math.max(rec.hx, rec.hz)), 12);
+    if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.4, c.z), rec.type === 'printer' || rec.type === 'cabinetTall' ? 12 : 8, 2.8));
+    fx.impact(V(c.x, clamp(c.y + 0.1, 0.4, 1.8), c.z), big ? 1.8 : 1.25, !isCalm());
     try { keepLook = toys.onDestroy(rec); } catch (e) { report(e); }
     floorHook(G.S, 'onDestroy', rec);
+    if (BIG_MOMENT.has(rec.type) || rec.rawPrice >= 1500000) bigMoment('crash', rec.type === 'car' ? 9 : 7);
+    else if (charge) { hitStop(big ? 'crash' : 'break'); shake(big ? 0.75 : 0.4); }
   }
   const remove = rec.prop.floats || (!rec.fixed && rec.mass < 15 && !rec.heavy);
   if (remove && !flip) {
@@ -1173,22 +1366,48 @@ function destroyRec(rec, dir, { flip = false, charge = false } = {}) {
 }
 const WRECK = new Map();
 G.removeQ = [];
+// (called from inside the physics step: only queue things here)
 function onImpact(rec, other, v) {
   if (!G.rampage) return;
   const t = G.S.phys.time;
+  // a flipped desk slamming down / heavy things landing: dust (+ the flip's big moment)
+  if ((rec.flipPending && t - rec.flipAt > 0.12 && v > 2.2) || (rec.mass >= 15 && v > 3.4 && !(rec.dustCool > t))) {
+    rec.dustCool = t + 0.6;
+    if (G.lands.length < 8) G.lands.push(rec);
+  }
   if (rec.cool > t) return;
   const charged = rec.energized > t || (other && other.energized > t);
   if (!charged || v < 5.2) return;
   rec.cool = t + 0.35;
   G.impacts.push([rec, v]);
 }
+G.lands = [];
 function flushImpacts() {
+  if (G.lands.length) {
+    for (const rec of G.lands) {
+      if (rec.removed) continue;
+      const p = rec.body.position;
+      if (rec.flipPending) flipLanded(rec);
+      else fx.dustRing(_c.set(p.x, 0, p.z), Math.min(1.2, 0.35 + Math.max(rec.hx, rec.hz) * 0.7), 9);
+    }
+    G.lands.length = 0;
+  }
   if (!G.impacts.length) return;
   const list = G.impacts; G.impacts = [];
   for (const [rec, v] of list) {
     if (rec.removed) continue;
     hitRec(rec, v > 9 ? 2 : 1, _d.set(0, 0, 0), 0, { vol: clamp(v / 12, 0.3, 0.8), shake: false });
   }
+}
+function flipLanded(rec) {
+  if (!rec.flipPending) return;
+  rec.flipPending = false;
+  const p = rec.body.position;
+  sfx('crash', { vol: 0.85 });
+  fx.dustRing(_c.set(p.x, 0, p.z), Math.min(1.5, 0.6 + Math.max(rec.hx, rec.hz)), 14);
+  fx.debris(_c.set(p.x, 0.3, p.z), rec.colors, 10, 2.6, 0.06);
+  bigMoment('flip', 6);
+  alarmAt(_c, 10);
 }
 function flushRemovals() {
   if (!G.removeQ.length) return;
@@ -1234,7 +1453,7 @@ function attack(kind) {
   if (!G.canDamage) {
     // story: a frustrated air punch, no damage
     P.char.playOnce(kind === 'kick' ? 'kick' : 'punch');
-    sfx('whoosh', { vol: 0.5 });
+    sfx(kind === 'kick' ? 'whooshKick' : 'whooshPunch', { vol: 0.5 });
     setFace('endure', 0.9);
     P.attackT = 0.45;
     return;
@@ -1244,7 +1463,7 @@ function attack(kind) {
   if (tg) aimAt(tg.kind === 'rec' ? tg.t.body.position : tg.t.pos);
   P.swing ^= 1;
   P.char.playOnce(kind === 'kick' ? 'kick' : P.swing ? 'punch' : 'punchL');
-  sfx('whoosh', { vol: 0.45, pitch: kind === 'kick' ? 0.8 : 1.1 });
+  sfx(kind === 'kick' ? 'whooshKick' : 'whooshPunch', { vol: 0.5 });
   P.attackT = kind === 'kick' ? 0.46 : 0.3;
   after(kind === 'kick' ? 0.19 : 0.11, () => resolveHit(kind));
 }
@@ -1261,9 +1480,12 @@ function resolveHit(kind) {
     if (n.knock(npcCtx(), dir, kind === 'kick' ? 1.3 : 0.8)) {
       emit('knock');
       sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.8 });
-      fx.sparks(V(n.pos.x, 1.1, n.pos.z), 8, 3);
-      G.shake = Math.max(G.shake, 0.35); G.hitStop = Math.max(G.hitStop, 0.06);
-      G.combo++; G.comboT = 1.5; ui.combo(G.combo);
+      sfx('hitSoft', { vol: 0.6 });
+      const hp = V(n.pos.x - dir.x * 0.2, 1.15, n.pos.z - dir.z * 0.2);
+      fx.impact(hp, kind === 'kick' ? 1.2 : 0.95, !isCalm());
+      fx.sparks(hp, 6, 3, dir);
+      shake(0.4); hitStop(kind === 'kick' ? 'kick' : 'punch'); camKick(dir, kind === 'kick' ? 0.16 : 0.1);
+      bumpCombo();
       alarmAt(n.pos, 9);
       if (Math.random() < 0.4) after(0.5, () => n.say(['아야…', '왜 나한테!', '산재 처리 되나요?!'][(Math.random() * 3) | 0], 1.8, G.rtime));
     }
@@ -1285,8 +1507,8 @@ function flipDesk(rec) {
   aimAt(b.position);
   P.char.playOnce('flip');
   b.wakeUp();
-  b.velocity.set(d.x * 2.6, 4.4, d.z * 2.6);
-  b.angularVelocity.set(d.z * 6.5, rnd(-1, 1), -d.x * 6.5);
+  b.velocity.set(d.x * 3.1, 4.8, d.z * 3.1);
+  b.angularVelocity.set(d.z * 7.2, rnd(-1, 1), -d.x * 7.2);
   rec.energized = S.phys.time + 3;
   // everything on top flies
   const R = { x: b.position.x, z: b.position.z, hx: rec.hx + 0.12, hz: rec.hz + 0.12, rot: 0 };
@@ -1302,14 +1524,17 @@ function flipDesk(rec) {
     r.energized = S.phys.time + 3;
   }
   sfx('flip', { vol: 0.9 });
-  after(0.35, () => sfx('crash', { vol: 0.7 }));
+  // the slam is felt when it lands (onImpact → flipLanded); fallback if the landing is too soft to register
+  rec.flipPending = true; rec.flipAt = S.phys.time;
+  after(1.1, () => { if (rec.flipPending && G.S === S) flipLanded(rec); });
   const c = recPos(rec, V());
-  count('paper', fx.papers(V(c.x, 1.0, c.z), 8, 2.2));
-  fx.debris(c, rec.colors, 6, 2.5, 0.05);
+  count('paper', fx.papers(V(c.x, 1.0, c.z), 12, 2.6));
+  fx.debris(c, rec.colors, 8, 2.8, 0.055, d);
+  fx.impact(V(c.x, 0.9, c.z), 1.3, !isCalm());
   destroyRec(rec, d, { flip: true });
   emit('flip', rec); // counts 'flip', 'flip:<type>'
-  G.combo++; G.comboT = 1.5; ui.combo(G.combo);
-  G.shake = Math.max(G.shake, 0.7); G.hitStop = Math.max(G.hitStop, 0.07);
+  bumpCombo();
+  shake(0.5); hitStop('kick'); camKick(d, 0.14);
   vibrate(45);
   alarmAt(c, 10);
 }
@@ -1340,7 +1565,7 @@ function throwHeld() {
   rec.energized = S.phys.time + 3;
   syncRec(rec);
   P.char.playOnce(P.heldBoth ? 'smash' : 'punch');
-  sfx('whoosh', { vol: 0.7, pitch: 0.85 });
+  sfx('whooshKick', { vol: 0.7 });
   P.attackT = 0.35;
 }
 function special() {
@@ -1350,14 +1575,21 @@ function special() {
   G.special = 0; G.specialReadyShown = false; ui.special(0);
   count('special');
   P.char.playOnce('special');
-  sfx('special', { vol: 0.9 });
-  G.slowT = 0.75; G.slowScale = 0.28;
-  if (!ui.settings.calm) ui.flash('#fff4c0', 200);
-  after(0.55, () => {
+  // the sfx's riser lands its boom SPECIAL_AT seconds after the call: shockwave, shake, hit-stop and damage
+  // fire on that same tick (timers run on the unscaled game clock, so the wind-up slow-mo doesn't shift it)
+  sfx('special', { vol: 0.9, at: SPECIAL_AT });
+  G.slowT = SPECIAL_AT; G.slowScale = 0.45;
+  ui.windup(SPECIAL_AT * 1000);
+  shake(0.25);
+  const gen = G.gen;
+  after(SPECIAL_AT, () => {
+    if (gen !== G.gen || !G.S) return;
     const S = G.S, c = P.pos.clone();
+    G.lastShock = { t: +G.rtime.toFixed(3), f: G.frames };
     fx.shockwave(c, 6.5);
-    G.shake = 1.1; G.hitStop = 0.08;
-    if (!ui.settings.calm) ui.flash('#ffe08a', 260);
+    fx.impact(V(c.x, 1.0, c.z), 3.2, !isCalm());
+    fx.dustRing(c, 1.6, 16);
+    shake(1.2); bigMoment('special', 10);
     vibrate(120);
     for (const r of S.phys.records) {
       if (r.removed || r.held || r.riding || r.out) continue;
@@ -1376,9 +1608,10 @@ function special() {
       const d = n.pos.distanceTo(c);
       if (d < 7 && n.knock(ctx, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.4 * (1 - d / 8))) emit('knock');
     }
-    sfx('crash', { vol: 1 });
+    sfx('crash', { vol: 0.75 });
   });
 }
+const SPECIAL_AT = 0.5;
 
 // ---- interact candidates during the rampage
 function rampageCandidate() {
@@ -1428,12 +1661,19 @@ function showBill() {
   if (isBest) save.best[key] = total;
   if (G.mode === 'story') save.days = (save.days | 0) + 1;
   writeSave();
+  // free mode has no clock: rank the damage per minute played (at least one minute counts)
+  let score = total, meta = '';
+  if (G.mode === 'free') {
+    const sec = Math.max(1, G.playT || 0), mins = Math.max(1, sec / 60);
+    score = Math.round(total / mins);
+    meta = `${Math.floor(sec / 60)}분 ${Math.round(sec % 60)}초 · 분당 ${fmt(score)}원`;
+  }
   let rank = RANKS[0];
-  for (const r of RANKS) if (total >= r[0]) rank = r;
+  for (const r of RANKS) if (score >= r[0]) rank = r;
   const relief = clamp(100 - G.stress, 0, 100);
   after(0.3, () => {
     ui.hud(false);
-    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, total, best: prev, isBest, relief, title: rank[1], comment: rank[2] });
+    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, total, best: prev, isBest, relief, title: rank[1], comment: rank[2], meta });
     audio.music('bill');
     after(0.5, () => sfx('stamp', { vol: 0.8 }));
     after(0.9, () => sfx(isBest ? 'newRecord' : 'fanfare', { vol: 0.7 }));
@@ -1442,7 +1682,7 @@ function showBill() {
   P.rage = false;
   setFace(total > 0 ? 'relief' : 'normal');
   P.char.setAnim(total > 0 ? 'cheer' : 'idle');
-  G.lastBill = { mode: G.mode, items: items.length, total, isBest, relief, rank: rank[1] };
+  G.lastBill = { mode: G.mode, items: items.length, total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1) };
 }
 function runTimersNow() { /* timers run on the next ticks; nothing to force */ }
 function endRampage() {
@@ -1589,6 +1829,18 @@ function updatePlayer(dt) {
     }
   }
   if (!P.controls || G.busy) { mx = 0; mz = 0; }
+  // just arrived by elevator: walk out of the car on your own; any move input after a moment takes over
+  if (G.arrive && !G.busy) {
+    const A = G.arrive;
+    A.t += dt / Math.max(0.03, G.timeScale); // real seconds
+    const [ix, iy] = moveInput();
+    if (!A.done) {
+      const dx = A.to.x - P.pos.x, dz = A.to.z - P.pos.z, d = Math.hypot(dx, dz);
+      if (d < 0.15 || A.t > 2.4 || (A.t > 0.3 && (ix || iy))) A.done = true;
+      else { mx = dx / d * 0.55; mz = dz / d * 0.55; }
+    }
+    if (A.done && (A.t > 1.1 || ix || iy)) G.arrive = null;
+  }
   if (toys.riding()) { toys.updateRide(dt, mx, mz); return; }
   const carrying = !!P.carry || (P.held && P.heldBoth);
   const vmax = carrying ? 1.9 : (G.rampage || G.mode === 'free' ? 4.7 : 3.0);
@@ -1678,7 +1930,7 @@ function tick(dt) {
   runTimers();
   // time scale: hit-stop and slow motion
   let scale = 1;
-  if (G.hitStop > 0) { G.hitStop -= rdt; scale = 0.06; }
+  if (G.hitStop > 0) { G.hitStop -= rdt; scale = 0.03; }
   else if (G.slowT > 0) { G.slowT -= rdt; scale = G.slowScale; }
   G.timeScale = scale;
   const gdt = rdt * scale;
@@ -1707,18 +1959,28 @@ function tick(dt) {
   S.phys.step(gdt);
   flushImpacts();
   flushRemovals();
-  // thrown things knock people over
+  // flying things knock people over (reach grows with the thing's size, power with its speed and weight)
   if (G.rampage) {
     const t = S.phys.time;
     for (const r of S.phys.records) {
-      if (r.removed || r.held || r.energized < t) continue;
-      const v = r.body.velocity; if (v.x * v.x + v.z * v.z < 16) continue;
+      if (r.removed || r.held || r.riding || r.energized < t) continue;
+      const v = r.body.velocity, v2 = v.x * v.x + v.z * v.z; if (v2 < 9) continue;
       const p = r.body.position;
+      if (p.y > 2.0 || p.y < 0.05) continue;
+      const reach = 0.42 + Math.min(0.6, Math.max(r.hx, r.hz));
       for (const n of S.npcs) {
         if (n.gone || n.state === 'air' || n.state === 'down') continue;
-        if (p.y > 1.9) continue;
         const dx = n.pos.x - p.x, dz = n.pos.z - p.z;
-        if (dx * dx + dz * dz < 0.36 && n.knock(npcCtx(), V(v.x, 0, v.z).normalize(), 0.7)) emit('knock');
+        if (dx * dx + dz * dz > reach * reach) continue;
+        const sp = Math.sqrt(v2);
+        _d.set(v.x / sp, 0, v.z / sp);
+        if (n.knock(npcCtx(), _d, clamp(0.45 + sp * 0.07 + Math.min(r.mass, 60) * 0.008, 0.6, 1.45))) {
+          emit('knock');
+          sfx('hitSoft', { vol: 0.75 }); sfx('punch', { vol: 0.5, pitch: 0.85 });
+          fx.impact(_c.set(n.pos.x, 1.15, n.pos.z), 1.0, !isCalm());
+          shake(0.3);
+          v.x *= 0.55; v.z *= 0.55; // the hit takes some speed out of the thing
+        }
       }
     }
   }
@@ -1746,7 +2008,10 @@ function tick(dt) {
     if (rp.a.removed || rp.b.removed || Math.abs(a.x - rp.ax) + Math.abs(a.z - rp.az) > 0.05 || Math.abs(b.x - rp.bx) + Math.abs(b.z - rp.bz) > 0.05) rp.m.visible = false;
   }
   updateElevators(rdt);
-  fx.update(gdt, G.rtime);
+  fx.update(gdt, G.rtime, rdt);
+  feelTick(rdt);
+  payCue();
+  if (G.rampage && !G.busy) G.playT = (G.playT || 0) + gdt;
   // rampage clock
   if (G.rampage) {
     if (G.special < 1) { G.special = Math.min(1, G.special + gdt / 45); ui.special(G.special); if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); } }
@@ -2181,6 +2446,30 @@ if (DEBUG) {
     },
     toys,
     emit,
+    // ---- feel / sound checks
+    sfxLog(clear = false) { const l = SFX_LOG.slice(); if (clear) { SFX_LOG.length = 0; for (const k in SFX_COUNT) delete SFX_COUNT[k]; } return l; },
+    sfxCount() { return Object.assign({}, SFX_COUNT); },
+    feel(clear = false) {
+      const o = { hs: FEEL.hs.slice(), hitStop: +G.hitStop.toFixed(3), shake: +G.shake.toFixed(3), shakeOff: +CAM.shakeOff.toFixed(4), kick: +FEEL.kick.length().toFixed(4), fov: +camera.fov.toFixed(2), fovPunch: +FEEL.fov.toFixed(2), big: FEEL.big, lastShock: G.lastShock || null, comboMiles: G.comboMiles || [], cabin: CAM.cabin, arrive: !!G.arrive, pitch: +CAM.pitch.toFixed(3), cam: camera.position.toArray().map((v) => +v.toFixed(2)), timeScale: G.timeScale, slowT: +G.slowT.toFixed(3) };
+      if (clear) { FEEL.hs.length = 0; G.comboMiles = []; FEEL.big = 0; }
+      return o;
+    },
+    fxStats() { return fx.stats(); },
+    // drop any prop on the floor at (x, z) (tests: a chair in an empty aisle)
+    spawn(type, x, z, rotY = 0, opts = {}) {
+      const S = G.S, p = makeAny(type, opts);
+      S.F.group.add(p.group);
+      return S.phys.addProp(p, x, 0, z, rotY, opts.tag || null, { prop: p, type }).id;
+    },
+    // a hit on record `id` as if from the player (direct: counts combo / hit-stop / kick like a punch)
+    hit(id, dmg = 1, power = 0, o = {}) {
+      const r = G.S.phys.records[id]; if (!r) return null;
+      const d = V(r.body.position.x - P.pos.x, 0, r.body.position.z - P.pos.z); if (d.lengthSq() < 1e-4) d.set(0, 0, 1); d.normalize();
+      hitRec(r, dmg, d, power, Object.assign({ direct: true }, o)); return { hp: r.hp, destroyed: r.destroyed, paid: r.paid, price: r.price };
+    },
+    calm(on = true) { ui.settings.calm = !!on; document.documentElement.classList.toggle('calm', !!on); return ui.settings.calm; },
+    // camera forward vector (pitch check: y < 0 looks down)
+    camDir() { const d = V(); camera.getWorldDirection(d); return d.toArray().map((v) => +v.toFixed(3)); },
     start(mode, opts) { G.fast = true; return start(mode, opts || {}); },
     goto(id) {
       G.fast = true;

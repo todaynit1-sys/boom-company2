@@ -125,7 +125,10 @@ emit(kind, rec) stress(d) alarm(pos, r) hitRec(rec, dmg, dir, power) setState(re
 * ≤ ~450 draw calls untouched on desktop (shadows included): `node tools/drive.mjs tools/sc-floor-one.mjs out 1280x720 floor=<id>` logs `renderer.info`.
   Repeated props with the same art options are batched automatically (InstancedMesh) — **vary options sparingly**
   (each distinct `text`/`color` is its own material/geometry). Big one-off fixtures: pass `noCast: true`.
-* Price scale: props.js ≈ won (desk 24,000); props2 already ×0.1 (a car ≈ 6,000,000).
+* Price scale: props.js ≈ won (desk 24,000); props2 already ×0.1 (a car ≈ 6,000,000). What the bill pays is
+  compressed above ₩80,000 (`phys.js → payPrice`: 250k → 135k, 800k → 190k, 3M → 254k, 6M → 287k, 15M → 330k),
+  so a floor's jackpots are worth ~2–4 ordinary smashes, not a whole minute. A floor's six challenge bonuses are
+  scaled to ≤ ₩420,000 in total. Pricing a prop higher still makes it a bigger jackpot, just not linearly.
 * Every floor needs an elevator (`ctx.room` adds a pair) and walkable space in front of it; keep 1 m around it clear.
 * Dynamic props spawn asleep at y (default 0); stack with `y`. Fixed props get a walking rect from their bounds.
 * Don't put things outside `size`: the nav grid and camera clamp use it; walls should sit on the bounds.

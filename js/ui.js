@@ -425,12 +425,24 @@ export const ui = {
     if (low && n > 0) anim(el, [{ transform: 'scale(1.25)' }, { transform: 'scale(1)' }], { duration: 320, easing: 'ease-out' });
   },
 
+  // grows with the count (tiers recolour it at 10 / 20 / 30); every hit kicks it, milestones kick harder
   combo(n) {
     const el = E.combo;
-    if (!n || n < 2) { el.hidden = true; return; }
+    if (!n || n < 2) { el.hidden = true; el.dataset.tier = '0'; return; }
+    n = Math.round(n);
     el.hidden = false;
-    el.innerHTML = `x<b>${Math.round(n)}</b> 연타`;
-    anim(el, [{ transform: 'scale(1.25) rotate(-4deg)' }, { transform: 'scale(1)' }], { duration: 220, easing: 'ease-out' });
+    el.innerHTML = `x<b>${n}</b> 연타`;
+    const tier = n >= 30 ? 3 : n >= 20 ? 2 : n >= 10 ? 1 : 0;
+    el.dataset.tier = String(tier);
+    const cs = 1 + Math.min(n, 40) * 0.018;
+    el.style.transform = `scale(${cs.toFixed(3)})`;
+    const calm = root.classList.contains('calm');
+    const big = n % 10 === 0;
+    anim(el, calm ? [{ opacity: 0.6 }, { opacity: 1 }] : [
+      { transform: `scale(${(cs * (big ? 1.7 : 1.32)).toFixed(3)}) rotate(${big ? -8 : (n % 2 ? -5 : 5)}deg)` },
+      { transform: `scale(${(cs * 0.94).toFixed(3)}) rotate(0deg)`, offset: 0.55 },
+      { transform: `scale(${cs.toFixed(3)})` },
+    ], { duration: big ? 420 : 240, easing: 'cubic-bezier(.2,.8,.3,1)' });
   },
 
   special(ratio) {
@@ -501,22 +513,34 @@ export const ui = {
     if (tx !== o.tx) { o.el.style.transform = tx; o.tx = tx; }
   },
 
-  moneyPop(x, y, amount) {
+  // size grows with the amount and the combo; colour steps at 10k / 50k / 200k (t1…t3)
+  moneyPop(x, y, amount, combo = 0) {
     const p = pops[popIdx];
     popIdx = (popIdx + 1) % pops.length;
     if (p.a) p.a.cancel();
     const a = Math.round(Number(amount) || 0);
     p.s.textContent = (a >= 0 ? '+' : '') + fmt(a) + '원';
-    p.w.classList.toggle('huge', a >= 100000);
+    const tier = a >= 200000 ? 3 : a >= 50000 ? 2 : a >= 10000 ? 1 : 0;
+    p.w.classList.toggle('huge', tier >= 2);
+    p.w.dataset.tier = String(tier);
     p.w.style.transform = `translate3d(${x | 0}px,${y | 0}px,0)`;
     p.w.hidden = false;
-    const base = 'translate(-50%,-50%) rotate(-6deg)';
-    const k = p.s.animate ? p.s.animate([
-      { transform: `${base} translateY(10px) scale(.4)`, opacity: 0 },
-      { transform: `${base} translateY(-6px) scale(1.18)`, opacity: 1, offset: 0.16 },
-      { transform: `${base} translateY(-14px) scale(1)`, opacity: 1, offset: 0.32 },
-      { transform: `${base} translateY(-70px) scale(.95)`, opacity: 0 },
-    ], { duration: 1150, easing: 'cubic-bezier(.2,.7,.4,1)', fill: 'forwards' }) : null;
+    const sc = Math.min(1.9, (0.72 + 0.2 * Math.log10(Math.max(1000, a) / 1000)) * (1 + Math.min(Number(combo) || 0, 30) * 0.012));
+    const tilt = ((popIdx % 3) - 1) * 4 - 6, drift = ((popIdx % 5) - 2) * 9;
+    const base = `translate(-50%,-50%) rotate(${tilt}deg)`;
+    const calm = root.classList.contains('calm');
+    const k = p.s.animate ? p.s.animate(calm ? [
+      { transform: `${base} scale(${sc.toFixed(2)})`, opacity: 0 },
+      { transform: `${base} scale(${sc.toFixed(2)})`, opacity: 1, offset: 0.15 },
+      { transform: `${base} translateY(-50px) scale(${sc.toFixed(2)})`, opacity: 0 },
+    ] : [
+      { transform: `${base} translateY(14px) scale(${(sc * 0.3).toFixed(2)})`, opacity: 0 },
+      { transform: `${base} translate(${drift * 0.3}px,-18px) scale(${(sc * 1.35).toFixed(2)})`, opacity: 1, offset: 0.13 },
+      { transform: `${base} translate(${drift * 0.5}px,-4px) scale(${(sc * 0.9).toFixed(2)})`, opacity: 1, offset: 0.24 },
+      { transform: `${base} translate(${drift * 0.6}px,-16px) scale(${(sc * 1.06).toFixed(2)})`, opacity: 1, offset: 0.34 },
+      { transform: `${base} translate(${drift * 0.7}px,-12px) scale(${sc.toFixed(2)})`, opacity: 1, offset: 0.45 },
+      { transform: `${base} translate(${drift}px,-80px) scale(${(sc * 0.92).toFixed(2)})`, opacity: 0 },
+    ], { duration: 1150 + tier * 150, easing: 'cubic-bezier(.2,.7,.4,1)', fill: 'forwards' }) : null;
     p.a = k;
     if (k) k.onfinish = () => { if (p.a === k) { p.w.hidden = true; p.a = null; } };
     else later(() => { p.w.hidden = true; }, 1100);
@@ -561,6 +585,22 @@ export const ui = {
     el.style.background = color;
     const peak = root.classList.contains('calm') ? 0.3 : 0.75;
     anim(el, [{ opacity: peak }, { opacity: 0 }], { duration: ms, easing: 'ease-out' });
+  },
+
+  // special wind-up: speed lines rushing in from the screen edges (calm: a soft vignette pulse instead)
+  windup(ms = 500) {
+    let el = E.speed;
+    if (!el) { el = E.speed = document.createElement('div'); el.id = 'speed'; el.setAttribute('aria-hidden', 'true'); E.flash.parentNode.insertBefore(el, E.flash); }
+    el.classList.toggle('soft', root.classList.contains('calm'));
+    el.getAnimations && el.getAnimations().forEach((a) => a.cancel());
+    el.style.display = 'block';
+    const k = anim(el, [
+      { opacity: 0, transform: 'scale(1.25)' },
+      { opacity: 1, transform: 'scale(1.05)', offset: 0.35 },
+      { opacity: 1, transform: 'scale(1)', offset: 0.9 },
+      { opacity: 0, transform: 'scale(.98)' },
+    ], { duration: ms, easing: 'ease-in' });
+    if (k) k.onfinish = () => { el.style.display = 'none'; }; else later(() => { el.style.display = 'none'; }, ms);
   },
 
   vignette(level) {
@@ -664,7 +704,7 @@ export const ui = {
     E['r-co'].textContent = data.company || '(주)가족같은회사';
     const d = new Date();
     const p2 = (n) => String(n).padStart(2, '0');
-    E['r-meta'].textContent = `${MODE_LABEL[data.mode] || '난동'} · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    E['r-meta'].textContent = `${MODE_LABEL[data.mode] || '난동'} · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}` + (data.meta ? ` · ${data.meta}` : '');
     const tb = E['r-items'];
     tb.textContent = '';
     const items = data.items || [];
