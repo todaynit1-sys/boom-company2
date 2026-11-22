@@ -24,7 +24,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="css/style.css?v=2">
+<link rel="stylesheet" href="css/style.css?v=3">
 <script type="importmap">
 {
   "imports": {
@@ -118,9 +118,14 @@
         </button>
         <div class="mbtn m-free">
           <b>자유 난동</b><small>시간 제한 없이, 층을 골라요</small>
-          <div class="floors">
-            <button type="button" data-free="office">7층 사무실</button>
-            <button type="button" data-free="lobby">1층 로비·카페</button>
+          <div class="floors" role="group" aria-label="층 고르기">
+            <button type="button" data-free="roof"><i>R</i>옥상</button>
+            <button type="button" data-free="exec"><i>12</i>임원층</button>
+            <button type="button" data-free="office"><i>7</i>사무실</button>
+            <button type="button" data-free="hall"><i>3</i>대강당</button>
+            <button type="button" data-free="lobby"><i>1</i>로비</button>
+            <button type="button" data-free="pub"><i>B1</i>회식</button>
+            <button type="button" data-free="parking"><i>B2</i>주차장</button>
           </div>
         </div>
       </div>
@@ -192,6 +197,6 @@
   <div id="boot"><div><p class="logo sm"><span class="l1">회사</span><span class="l2">뿌개기</span></p><p class="boot-t">불러오는 중…</p></div></div>
 </div>
 
-<script type="module" src="js/main.js?v=2"></script>
+<script type="module" src="js/main.js?v=3"></script>
 </body>
 </html>

@@ -42,6 +42,24 @@ export function createFx(scene) {
   }
   let pIdx = 0;
 
+  // ---------------- puffs (extinguisher smoke, dust): round white blobs that grow then shrink away
+  const FN = 120;
+  const fMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: '#f4f6f8', roughness: 1, emissive: '#ffffff', emissiveIntensity: 0.12 }), FN);
+  fMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); fMesh.frustumCulled = false; fMesh.castShadow = false; fMesh.receiveShadow = false;
+  const PF = [];
+  for (let i = 0; i < FN; i++) { PF.push({ on: false, p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0, max: 1, s: 0.2 }); fMesh.setMatrixAt(i, _m); }
+  root.add(fMesh);
+  let fIdx = 0;
+
+  // ---------------- water drops (sprinklers, burst tanks)
+  const WN = 320;
+  const wMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.014, 0.15, 0.014), new THREE.MeshBasicMaterial({ color: '#bfe6ff', transparent: true, opacity: 0.7, depthWrite: false }), WN);
+  wMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); wMesh.frustumCulled = false; wMesh.castShadow = false;
+  const WD = [];
+  for (let i = 0; i < WN; i++) { WD.push({ on: false, p: new THREE.Vector3(), v: new THREE.Vector3(), life: 0 }); wMesh.setMatrixAt(i, _m); }
+  root.add(wMesh);
+  let wIdx = 0;
+
   // ---------------- tossed (non-physics) props: paper balls etc.
   const tossed = [];
 
@@ -99,6 +117,18 @@ export function createFx(scene) {
       group.position.copy(pos); parent.add(group);
       tossed.push({ g: group, v: vel.clone(), w: new THREE.Vector3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(spin), t: 0, rest: false });
     },
+    puff(pos, vel, size = 0.18, life = 0.9) {
+      const P = PF[fIdx]; fIdx = (fIdx + 1) % FN;
+      P.on = true; P.life = 0; P.max = life * rnd(0.8, 1.2); P.s = size * rnd(0.7, 1.3);
+      P.p.copy(pos); P.v.copy(vel);
+    },
+    drop(pos, vel) {
+      const d = WD[wIdx]; wIdx = (wIdx + 1) % WN;
+      d.on = true; d.life = 0; d.p.copy(pos); d.v.copy(vel);
+    },
+    water(pos, n = 30, power = 2.5) {
+      for (let k = 0; k < n; k++) fx.drop(_p.set(pos.x + rnd(-0.3, 0.3), pos.y + rnd(0, 0.3), pos.z + rnd(-0.3, 0.3)), new THREE.Vector3(rnd(-1, 1) * power, rnd(0.4, 1.4) * power, rnd(-1, 1) * power));
+    },
     shockwave(pos, radius = 6) {
       ring.position.set(pos.x, 0.06, pos.z); ring.visible = true; ringT = 0; ring.userData.r = radius;
     },
@@ -115,7 +145,11 @@ export function createFx(scene) {
       _m.makeScale(0, 0, 0);
       for (let i = 0; i < DN; i++) dMesh.setMatrixAt(i, _m);
       for (let i = 0; i < SN; i++) sMesh.setMatrixAt(i, _m);
-      dMesh.instanceMatrix.needsUpdate = true; sMesh.instanceMatrix.needsUpdate = true;
+      for (const P of PF) P.on = false;
+      for (const d of WD) d.on = false;
+      for (let i = 0; i < FN; i++) fMesh.setMatrixAt(i, _m);
+      for (let i = 0; i < WN; i++) wMesh.setMatrixAt(i, _m);
+      dMesh.instanceMatrix.needsUpdate = true; sMesh.instanceMatrix.needsUpdate = true; fMesh.instanceMatrix.needsUpdate = true; wMesh.instanceMatrix.needsUpdate = true;
       ring.visible = false; mk.visible = false;
     },
     papersLanded() { let n = 0; for (const P of papers) if (P.on && P.landed) n++; return n; },
@@ -156,6 +190,37 @@ export function createFx(scene) {
         _m.compose(s.p, _q, _s); sMesh.setMatrixAt(i, _m);
       }
       sMesh.instanceMatrix.needsUpdate = true;
+      // puffs
+      let anyF = false;
+      for (let i = 0; i < FN; i++) {
+        const P = PF[i];
+        if (!P.on) continue;
+        anyF = true;
+        P.life += dt;
+        if (P.life > P.max) { P.on = false; _m.makeScale(0, 0, 0); fMesh.setMatrixAt(i, _m); continue; }
+        P.v.multiplyScalar(1 - Math.min(1, dt * 2.2)); P.v.y += 0.5 * dt;
+        P.p.addScaledVector(P.v, dt);
+        if (P.p.y < P.s * 0.6) P.p.y = P.s * 0.6;
+        const k = P.life / P.max, sc = P.s * (0.5 + k * 1.6) * (k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1);
+        _q.identity(); _s.set(sc, sc * 0.9, sc);
+        _m.compose(P.p, _q, _s); fMesh.setMatrixAt(i, _m);
+      }
+      if (anyF || fMesh.userData.was) fMesh.instanceMatrix.needsUpdate = true;
+      fMesh.userData.was = anyF;
+      // water drops
+      let anyW = false;
+      for (let i = 0; i < WN; i++) {
+        const d = WD[i];
+        if (!d.on) continue;
+        anyW = true;
+        d.life += dt; d.v.y -= 11 * dt; d.p.addScaledVector(d.v, dt);
+        if (d.p.y < 0.02 || d.life > 2.5) { d.on = false; _m.makeScale(0, 0, 0); wMesh.setMatrixAt(i, _m); continue; }
+        _q.identity(); _s.set(1, 1, 1);
+        _m.compose(d.p, _q, _s); wMesh.setMatrixAt(i, _m);
+      }
+      if (anyW || wMesh.userData.was) wMesh.instanceMatrix.needsUpdate = true;
+      wMesh.userData.was = anyW;
+      fMesh.visible = anyF; wMesh.visible = anyW; // no draw calls while idle
       // papers
       for (const P of papers) {
         if (!P.on || P.landed) continue;

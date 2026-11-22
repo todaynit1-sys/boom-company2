@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Art2 Test</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #20232a; overflow: hidden; font-family: "Malgun Gothic", sans-serif; }
+  #info { position: fixed; left: 8px; top: 8px; color: #fff; font: 12px/1.35 monospace; background: rgba(0,0,0,.5); padding: 6px 9px; border-radius: 6px; white-space: pre; z-index: 2; max-height: 95vh; overflow: hidden; }
+  #err { position: fixed; left: 8px; bottom: 8px; right: 8px; color: #fff; background: rgba(200,20,20,.9); font: 13px/1.4 monospace; padding: 6px 9px; white-space: pre-wrap; display: none; z-index: 3; }
+</style>
+<script>
+  window.__errs = [];
+  function __showErr(m) { window.__errs.push(m); var e = document.getElementById('err'); if (e) { e.style.display = 'block'; e.textContent = window.__errs.join('\n'); } }
+  window.addEventListener('error', function (ev) { __showErr('ERR ' + (ev.message || ev.type) + ' @' + (ev.filename || '') + ':' + (ev.lineno || '')); }, true);
+  window.addEventListener('unhandledrejection', function (ev) { __showErr('REJ ' + (ev.reason && (ev.reason.stack || ev.reason.message) || ev.reason)); });
+  var _ce = console.error; console.error = function () { __showErr('console.error ' + Array.prototype.join.call(arguments, ' ')); _ce.apply(console, arguments); };
+  var _cw = console.warn; console.warn = function () { __showErr('console.warn ' + Array.prototype.join.call(arguments, ' ')); _cw.apply(console, arguments); };
+  setTimeout(function () { if (!window.__artReady) __showErr('NOT READY after 6s (module failed to load?)'); }, 6000);
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="info"></div>
+<div id="err"></div>
+<script type="module">
+// ?only=a,b  ?page=N&per=N  ?state=X (applied to every prop with set())  ?state=demo (state gallery)
+// ?compare=1 (adds props.js desk/printer/sofa)  ?t=SECONDS  ?floor=carpet|roof|parking|hall|pub|wood  ?list  ?dist=  ?top  ?sky=day|dusk
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { makeProp2, PROP2_TYPES, tex2 } from '../js/art/props2.js';
+import { makeProp } from '../js/art/props.js';
+import { tex } from '../js/art/tex.js';
+
+const Q = new URLSearchParams(location.search);
+const fixedT = Q.has('t') ? parseFloat(Q.get('t')) : null;
+if (fixedT != null) { const t0 = fixedT * 1000; performance.now = () => t0; }
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#cfd8e3');
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 400);
+const controls = new OrbitControls(camera, renderer.domElement);
+scene.add(new THREE.HemisphereLight('#fff7ea', '#8b8070', 1.1));
+const sun = new THREE.DirectionalLight('#fff1dc', 2.3);
+sun.position.set(6, 12, 8); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
+scene.add(sun, sun.target);
+const fill = new THREE.DirectionalLight('#cfe0ff', 0.5); fill.position.set(-6, 5, -4); scene.add(fill);
+
+const floorKind = Q.get('floor') || 'carpet';
+const ft = { carpet: () => tex.carpet(), roof: () => tex2.asphaltRoof(), parking: () => tex2.parkingFloor(), hall: () => tex2.hallFloor(), pub: () => tex2.pubFloor(), wood: () => tex2.darkWood(), concrete: () => tex2.concrete() }[floorKind] || (() => tex.carpet());
+const floorTex = ft().clone(); floorTex.needsUpdate = true; floorTex.repeat.set(40, 40);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.95 }));
+floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+if (Q.get('sky')) {
+  const st = (Q.get('sky') === 'dusk' ? tex2.skyDusk() : tex2.skyDay());
+  const sky = new THREE.Mesh(new THREE.CylinderGeometry(150, 150, 120, 48, 1, true), new THREE.MeshBasicMaterial({ map: st, side: THREE.BackSide }));
+  sky.position.y = 25; scene.add(sky);
+}
+
+function label(text, x, y, z, s = 0.16) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(0, 10, 512, 76);
+  g.fillStyle = '#111'; g.font = 'bold 44px "Malgun Gothic", sans-serif'; g.textAlign = 'center'; g.fillText(text, 256, 64);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false }));
+  sp.scale.set(s * 5.33, s, 1); sp.position.set(x, y, z); sp.renderOrder = 10; scene.add(sp); return sp;
+}
+const tris = (o) => { let n = 0; o.traverse((m) => { if (m.isMesh && m.visible) n += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3; }); return n | 0; };
+
+// list of {type, opts, state, lab, lib}
+let entries = [];
+const state = Q.get('state');
+if (state === 'demo') {
+  for (let s = 0; s <= 4; s++) entries.push({ type: 'car', opts: {}, state: s, lab: 'car ' + s });
+  for (const s of [0, 2, 4]) entries.push({ type: 'car', opts: { boss: true }, state: s, lab: 'boss ' + s });
+  entries.push({ type: 'ceoSafe', state: 1, lab: 'safe open' }, { type: 'aquarium', state: 'broken', lab: 'aquarium broken' }, { type: 'watertank', state: 'burst', lab: 'tank burst' }, { type: 'watertank', state: 'leak', lab: 'tank leak' },
+    { type: 'sojuFridge', state: 'broken', lab: 'fridge broken' }, { type: 'forklift', state: 1, lab: 'forklift up' }, { type: 'barrierGate', state: 1, lab: 'barrier up' }, { type: 'gate', state: 1, lab: 'gate open' },
+    { type: 'alarmBell', state: true, lab: 'alarm on' });
+} else {
+  let types = PROP2_TYPES;
+  if (Q.get('only')) types = Q.get('only').split(',');
+  const per = parseInt(Q.get('per') || '0', 10), page = parseInt(Q.get('page') || '1', 10);
+  if (per) types = types.slice((page - 1) * per, (page - 1) * per + per);
+  entries = types.map((t) => ({ type: t, opts: {}, state: state != null ? (isNaN(+state) ? state : +state) : undefined, lab: t }));
+  if (Q.get('opts')) { const o = JSON.parse(Q.get('opts')); entries.forEach((e) => (e.opts = o)); }
+}
+if (Q.has('compare')) entries.unshift({ type: 'desk', lib: 1, lab: 'desk (props)' }, { type: 'printer', lib: 1, lab: 'printer (props)' }, { type: 'sofa', lib: 1, lab: 'sofa (props)' });
+
+const rowW = parseFloat(Q.get('rowW') || '14');
+let x = 0, z = 0, rowD = 0, maxX = 0;
+const lines = [];
+for (const e of entries) {
+  let p;
+  try { p = e.lib ? makeProp(e.type, e.opts || {}) : makeProp2(e.type, e.opts || {}); }
+  catch (err) { __showErr('build ' + e.type + ': ' + (err.stack || err)); continue; }
+  if (e.state !== undefined && p.set) p.set(e.state);
+  const w = Math.max(p.size.x, 0.6);
+  if (x + w > rowW && x > 0) { z += rowD + 1.3; x = 0; rowD = 0; }
+  p.group.position.set(x + w / 2, 0, z);
+  const mount = p.mount;
+  if (mount === 'ceiling') p.group.position.y = 0.4;
+  if (mount === 'wall') p.group.position.y = 0.6;
+  scene.add(p.group);
+  label(e.lab, x + w / 2, p.group.position.y + Math.max(p.size.y, 0.3) + 0.25, z, 0.16);
+  // check origin
+  const b = new THREE.Box3().setFromObject(p.group);
+  const off = Math.abs(b.min.y - p.group.position.y) > 0.01 || Math.abs((b.max.x + b.min.x) / 2 - p.group.position.x) > 0.01 || Math.abs((b.max.z + b.min.z) / 2 - p.group.position.z) > 0.01;
+  x += w + 0.6; maxX = Math.max(maxX, x); rowD = Math.max(rowD, p.size.z);
+  const extra = ['mount', 'ride', 'hold', 'floats'].filter((k) => p[k]).map((k) => k + '=' + p[k]).join(' ') + (p.set ? ' set()' : '') + (p.parts ? ' parts' : '') + (p.fork ? ' fork' : '');
+  lines.push(`${e.lab.padEnd(16)} ${String(p.name).padEnd(9)} ${p.size.x.toFixed(2)}×${p.size.y.toFixed(2)}×${p.size.z.toFixed(2)} ${String(p.mass).padStart(5)}kg ${String(p.price).padStart(10)}원 ${p.material.padEnd(7)} tris ${tris(p.group)} ${extra}${off && !e.state ? ' ORIGIN?' : ''}`);
+}
+window.__propLines = lines;
+console.log(lines.join('\n'));
+const cx = maxX / 2, cz = z / 2;
+const span = Math.max(maxX, z * 1.6, 3);
+const zm = parseFloat(Q.get('dist') || '1');
+camera.position.set(cx, (span * 0.45 + 1.2) * zm, cz + (span * 0.7 + 1.5) * zm);
+controls.target.set(cx, 0.6, cz); controls.update();
+if (Q.has('top')) { camera.position.set(cx, span * 1.1, cz + span * 0.35); controls.update(); }
+const sh = Math.max(14, span);
+sun.position.set(cx + 6, 14, cz + 8); sun.target.position.set(cx, 0, cz);
+sun.shadow.camera.left = -sh; sun.shadow.camera.right = sh; sun.shadow.camera.top = sh; sun.shadow.camera.bottom = -sh;
+sun.shadow.camera.far = 80; sun.shadow.camera.updateProjectionMatrix();
+
+const info = document.getElementById('info');
+renderer.render(scene, camera);
+info.textContent = `art2 ${entries.length} props  calls ${renderer.info.render.calls} tris ${renderer.info.render.triangles}` + (Q.has('list') ? '\n' + lines.join('\n') : '');
+function loop() { renderer.render(scene, camera); requestAnimationFrame(loop); }
+if (fixedT == null) loop();
+window.__artReady = true;
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

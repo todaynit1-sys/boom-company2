@@ -29,6 +29,7 @@ export function createPhys(F) {
     body.position.set(b.x, b.y, b.z);
     body.quaternion.setFromEuler(0, b.rot || 0, 0);
     world.addBody(body);
+    if (b.ref) b.ref.body = body; // breakable window panes keep their body so they can be removed
   }
   // kinematic player capsule (nudges chairs and small things)
   const playerBody = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, allowSleep: false });
@@ -43,21 +44,25 @@ export function createPhys(F) {
     addProp(prop, x, y, z, rotY = 0, tag = null, sp = null) {
       const s = prop.size;
       const hx = Math.max(0.02, s.x / 2), hy = Math.max(0.012, s.y / 2), hz = Math.max(0.02, s.z / 2);
+      // fixed = breakable fixture (static body: aquarium, safe, wall-mounted things until knocked loose)
+      const fixed = !!(sp && sp.fixed);
       const body = new CANNON.Body({
-        mass: clamp(prop.mass, 0.15, 160), shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)),
+        mass: fixed ? 0 : clamp(prop.mass, 0.15, 160), type: fixed ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC,
+        shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)),
         linearDamping: 0.06, angularDamping: 0.12, allowSleep: true,
       });
       body.sleepSpeedLimit = 0.3; body.sleepTimeLimit = 0.45;
       body.position.set(x, y + hy, z);
       body.quaternion.setFromEuler(0, rotY, 0);
       world.addBody(body);
-      body.sleep();
-      const hpMax = hpFor(prop.mass);
+      if (!fixed) body.sleep();
+      const hpMax = sp && sp.hp ? sp.hp : fixed && prop.mass <= 0 ? clamp(Math.round(Math.sqrt(Math.max(1, prop.price) / 20000)), 2, 10) : hpFor(prop.mass);
       const rec = {
         id: records.length, sp, prop, type: prop.type, name: prop.name, group: prop.group, body, hx, hy, hz,
         mass: prop.mass, price: prop.price, material: prop.material, colors: prop.colors,
         hp: hpMax, hpMax, paid: 0, destroyed: false, wrecked: false, flipped: false, held: false, removed: false,
-        heavy: prop.mass >= HEAVY, tag, energized: 0, cool: 0, awakeLast: false, solid: false, kicked: false,
+        heavy: prop.mass >= HEAVY && !fixed, tag, energized: 0, cool: 0, awakeLast: false, solid: false, kicked: false,
+        fixed, hang: !!(sp && sp.hang), riding: false, stage: 0,
         box: { x: 0, z: 0, hx: 0, hz: 0, rot: 0, c: 1, s: 0, y1: 0, off: false },
       };
       prop.group.matrixAutoUpdate = false;
@@ -80,17 +85,17 @@ export function createPhys(F) {
       let awake = 0;
       for (let i = 0; i < records.length; i++) {
         const r = records[i];
-        if (r.removed || r.held) continue;
+        if (r.removed || r.held || r.fixed) continue;
         const aw = r.body.sleepState !== SLEEPING;
         if (aw) awake++;
         if (aw || r.awakeLast) syncRec(r);
         r.awakeLast = aw;
-        if (aw && r.body.position.y < -2) { r.body.position.set(r.body.position.x, 1, r.body.position.z); r.body.velocity.set(0, 0, 0); }
+        if (aw && r.body.position.y < -2 && !r.out) { r.body.position.set(r.body.position.x, 1, r.body.position.z); r.body.velocity.set(0, 0, 0); }
       }
       // keep the active set sane: put slow, non-energised bodies to sleep when too many are awake
       if (awake > 110) {
         for (const r of records) {
-          if (r.removed || r.held || r.body.sleepState === SLEEPING || r.energized > P.time) continue;
+          if (r.removed || r.held || r.fixed || r.riding || r.body.sleepState === SLEEPING || r.energized > P.time) continue;
           const b = r.body;
           if (b.velocity.lengthSquared() < 1.2) { b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.sleep(); syncRec(r); if (--awake <= 80) break; }
         }
@@ -98,9 +103,26 @@ export function createPhys(F) {
       P.awake = awake;
     },
     wake(rec) { if (rec.body.sleepState === SLEEPING) rec.body.wakeUp(); },
+    // a fixture knocked loose (wall clock, CCTV, mirror ball…) becomes an ordinary falling body
+    release(rec) {
+      if (!rec.fixed || rec.removed) return false;
+      if (rec.inst) rec.inst(rec);
+      rec.fixed = false; rec.hang = false;
+      const b = rec.body;
+      b.type = CANNON.Body.DYNAMIC; b.mass = clamp(rec.mass || 1, 0.15, 160); b.updateMassProperties();
+      b.wakeUp();
+      rec.heavy = rec.mass >= HEAVY;
+      return true;
+    },
+    // riding / forklift-carried: the body follows the game, still pushes other bodies around
+    setKinematic(rec, on) {
+      const b = rec.body;
+      if (on) { if (rec.inst) rec.inst(rec); b.type = CANNON.Body.KINEMATIC; b.mass = 0; b.updateMassProperties(); b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0); b.wakeUp(); }
+      else { b.type = CANNON.Body.DYNAMIC; b.mass = clamp(rec.mass, 0.15, 160); b.updateMassProperties(); b.wakeUp(); }
+    },
     wakeNear(x, y, z, rad, except) {
       for (const r of records) {
-        if (r === except || r.removed || r.held) continue;
+        if (r === except || r.removed || r.held || r.fixed) continue;
         const p = r.body.position;
         const dx = p.x - x, dz = p.z - z;
         if (dx * dx + dz * dz < rad * rad && p.y > y - 0.2) r.body.wakeUp();
@@ -135,7 +157,7 @@ export function createPhys(F) {
       out.length = 0;
       for (let i = 0; i < records.length; i++) {
         const r = records[i];
-        if (r.removed || r.held || !(r.heavy || r.solid)) continue;
+        if (r.removed || r.held || r.riding || r.fixed || !(r.heavy || r.solid)) continue;
         const b = r.body, q = b.quaternion, B = r.box;
         const upY = 1 - 2 * (q.x * q.x + q.z * q.z);
         if (upY > 0.85) {
@@ -163,7 +185,7 @@ export function createPhys(F) {
     },
     counts() {
       let live = 0, awake = 0;
-      for (const r of records) { if (r.removed) continue; live++; if (!r.held && r.body.sleepState !== SLEEPING) awake++; }
+      for (const r of records) { if (r.removed) continue; live++; if (!r.held && !r.fixed && r.body.sleepState !== SLEEPING) awake++; }
       return { bodies: world.bodies.length, records: live, awake };
     },
   };

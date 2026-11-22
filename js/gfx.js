@@ -14,6 +14,10 @@ export const PRESETS = {
   sunset: { sun: '#ff9548', sunI: 4.2, sunDir: [-0.42, 0.2, -1.0], hemiSky: '#ffc49a', hemiGround: '#4c3e5c', hemiI: 0.72, top: '#ffd6b0', topI: 0.32, amb: 0.12, exposure: 0.98, fog: '#d99a86', fogNear: 24, fogFar: 64, env: 0.28, sky: 'sunset' },
   lobby: { sun: '#fff4e2', sunI: 2.3, sunDir: [0.3, 0.85, -0.5], hemiSky: '#f3efe8', hemiGround: '#6e6456', hemiI: 0.62, top: '#fff3e2', topI: 0.3, amb: 0.1, exposure: 0.86, fog: '#e4e7ea', fogNear: 30, fogFar: 85, env: 0.32, sky: 'day' },
   title: { sun: '#fff0da', sunI: 2.4, sunDir: [-0.35, 0.72, -0.6], hemiSky: '#f4f1ea', hemiGround: '#7a6a58', hemiI: 0.95, top: '#fff6e8', topI: 0.55, amb: 0.14, exposure: 0.95, fog: '#dfe5ec', fogNear: 26, fogFar: 70, env: 0.38, sky: 'day' },
+  // underground: no sky. A soft top-down "sun" only to keep contact shadows; cool fill, readable (not a cave)
+  garage: { sun: '#e6eeff', sunI: 1.15, sunDir: [0.18, 1.0, 0.32], hemiSky: '#d5deec', hemiGround: '#5d6470', hemiI: 1.25, top: '#eef3ff', topI: 0.62, amb: 0.2, exposure: 1.06, fog: '#2a313b', fogNear: 17, fogFar: 46, env: 0.42, sky: 'none' },
+  // windowless interiors (hall, pub) — warm
+  indoor: { sun: '#fff1de', sunI: 1.2, sunDir: [0.2, 1.0, 0.25], hemiSky: '#f6efe4', hemiGround: '#6e5e50', hemiI: 1.1, top: '#fff3e2', topI: 0.55, amb: 0.16, exposure: 1.0, fog: '#3a3340', fogNear: 20, fogFar: 55, env: 0.38, sky: 'none' },
 };
 
 export function createGfx(canvas, { touch = false, debug = false } = {}) {
@@ -107,7 +111,7 @@ export function createGfx(canvas, { touch = false, debug = false } = {}) {
     fit(bounds, ceilY = 3) {
       G.bounds = bounds;
       const cx = (bounds.minX + bounds.maxX) / 2, cz = (bounds.minZ + bounds.maxZ) / 2;
-      const P = PRESETS[G.preset] || PRESETS.day;
+      const P = G.cur || PRESETS[G.preset] || PRESETS.day;
       const d = new THREE.Vector3(...P.sunDir).normalize();
       sun.target.position.set(cx, 0, cz);
       sun.position.set(cx + d.x * 40, d.y * 40, cz + d.z * 40);
@@ -118,9 +122,12 @@ export function createGfx(canvas, { touch = false, debug = false } = {}) {
       top.target.position.set(cx, 0, cz);
       top.position.set(cx + 0.3, 10, cz + 0.6);
     },
+    // name: a PRESETS key, or an object { preset?: key, ...overrides } (floor modules' custom light)
     applyPreset(name) {
-      const P = PRESETS[name] || PRESETS.day;
-      G.preset = name;
+      let P;
+      if (name && typeof name === 'object') { P = Object.assign({}, PRESETS[name.preset] || PRESETS.day, name); name = name.preset || 'custom'; }
+      else P = PRESETS[name] || PRESETS.day;
+      G.preset = name; G.cur = P;
       sun.color.set(P.sun); sun.intensity = P.sunI;
       hemi.color.set(P.hemiSky); hemi.groundColor.set(P.hemiGround); hemi.intensity = P.hemiI;
       top.color.set(P.top); top.intensity = P.topI;

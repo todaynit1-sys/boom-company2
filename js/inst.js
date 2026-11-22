@@ -8,12 +8,14 @@ import * as THREE from 'three';
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _inv = new THREE.Matrix4(), _m = new THREE.Matrix4();
 
-export function instanceFloor(F, phys, { skip = new Set() } = {}) {
+// batchSet: types whose prop has a set() state but can still be batched while untouched (cars, gates).
+// Anything that calls set() on such a prop must release the batch first (rec.inst(rec)).
+export function instanceFloor(F, phys, { skip = new Set(), batchSet = new Set() } = {}) {
   F.group.updateMatrixWorld(true);
   _inv.copy(F.group.matrixWorld).invert();
   const buckets = new Map();
   for (const rec of phys.records) {
-    if (rec.removed || rec.held || rec.prop.set || skip.has(rec.type)) continue;
+    if (rec.removed || rec.held || (rec.prop.set && !batchSet.has(rec.type)) || skip.has(rec.type)) continue;
     rec.group.traverse((m) => {
       if (!m.isMesh || m.isInstancedMesh || !m.visible) return;
       const mt = m.material;

@@ -629,11 +629,14 @@ export const ui = {
       b.type = 'button'; b.className = 'ev-btn'; b.dataset.id = f.id;
       const cur = f.id === panel.current;
       if (cur) { b.classList.add('cur'); b.setAttribute('aria-disabled', 'true'); }
-      const fl = document.createElement('span'); fl.className = 'fl'; fl.textContent = f.label || f.id;
+      if (panel.sel === f.id) b.classList.add('sel');
+      const fl = document.createElement('span'); fl.className = 'fl' + (String(f.label || '').length > 1 ? ' long' : ''); fl.textContent = f.label || f.id;
       const tx = document.createElement('span'); tx.className = 'tx';
-      const bb = document.createElement('b'); bb.textContent = f.sub || f.label || '';
-      const sm = document.createElement('small'); sm.textContent = cur ? '지금 여기' : '이 층으로 가기';
-      tx.append(bb, sm); b.append(fl, tx); list.appendChild(b);
+      const bb = document.createElement('b'); bb.textContent = f.name || f.label || '';
+      const sm = document.createElement('small'); sm.textContent = cur ? '지금 여기' : (f.sub || '이 층으로 가기');
+      tx.append(bb, sm); b.append(fl, tx);
+      if (f.keyLabel) { const k = document.createElement('span'); k.className = 'kc ev-key'; const kb = document.createElement('b'); kb.textContent = f.keyLabel; k.appendChild(kb); b.appendChild(k); }
+      list.appendChild(b);
     }
     el.hidden = false;
   },

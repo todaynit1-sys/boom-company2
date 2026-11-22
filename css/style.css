@@ -265,11 +265,15 @@ button:focus-visible { outline: 3px solid var(--yel); outline-offset: 2px; }
 .ev-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .ev-head h3 { margin: 0; font-size: 18px; font-weight: 900; }
 .ev-arrow { width: 0; height: 0; border: 9px solid transparent; border-bottom: 13px solid var(--yel); margin-top: -10px; filter: drop-shadow(0 0 6px rgba(255, 210, 63, .8)); }
-#ev-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-.ev-btn { display: flex; align-items: center; gap: 14px; padding: 8px 12px 8px 8px; border-radius: 14px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(255, 255, 255, .12); text-align: left; }
-.ev-btn .fl { flex: none; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font-family: var(--head-font); font-size: 19px; background: radial-gradient(circle at 50% 35%, #f4f6fa, #c4c9d4); color: #22252e; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18), 0 0 0 3px #6b7282; }
-.ev-btn .tx b { display: block; font-size: 16px; font-weight: 900; }
-.ev-btn .tx small { font-size: 13px; color: var(--muted); }
+#ev-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+.ev-btn { display: flex; align-items: center; gap: 12px; padding: 5px 10px 5px 6px; border-radius: 14px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(255, 255, 255, .12); text-align: left; }
+.ev-btn .fl { flex: none; width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-family: var(--head-font); font-size: 18px; background: radial-gradient(circle at 50% 35%, #f4f6fa, #c4c9d4); color: #22252e; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18), 0 0 0 3px #6b7282; }
+.ev-btn .tx { flex: 1; min-width: 0; }
+.ev-btn .tx b { display: block; font-size: 15px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-btn .tx small { display: block; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-btn .ev-key { flex: none; font-size: 11px; opacity: .8; }
+.ev-btn.sel { border-color: var(--yel); background: rgba(255, 210, 63, .14); }
+.ev-btn.sel .fl { box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18), 0 0 0 3px var(--yel), 0 0 14px rgba(255, 210, 63, .7); }
 .ev-btn:hover .fl { box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .18), 0 0 0 3px var(--yel), 0 0 14px rgba(255, 210, 63, .7); }
 .ev-btn.cur { opacity: .7; cursor: default; }
 .ev-btn.cur .fl { background: radial-gradient(circle at 50% 35%, #fff3b0, #ffc21f); box-shadow: 0 0 0 3px #fff3b0, 0 0 14px rgba(255, 210, 63, .8); }
@@ -299,8 +303,9 @@ button.mbtn:active { transform: scale(.98); }
 .m-story b { font-size: 30px; }
 .m-rush { background: linear-gradient(135deg, #ff6f61, #e2304a); border-color: #ffb3a8; box-shadow: 0 4px 0 #9e1a2a; }
 .m-free { background: linear-gradient(135deg, rgba(78, 140, 255, .9), rgba(47, 100, 224, .9)); border-color: #a9c6ff; box-shadow: 0 4px 0 #1b3f9c; }
-.floors { display: flex; gap: 8px; margin-top: 9px; }
-.floors button { flex: 1; min-height: 40px; padding: 0 8px; border-radius: 11px; background: rgba(255, 255, 255, .95); color: #1c3d8f; font-weight: 900; font-size: 14.5px; box-shadow: 0 3px 0 rgba(20, 40, 110, .55); transition: transform .12s; white-space: nowrap; }
+.floors { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 9px; }
+.floors button { min-height: 40px; padding: 0 6px; border-radius: 11px; background: rgba(255, 255, 255, .95); color: #1c3d8f; font-weight: 900; font-size: 13.5px; box-shadow: 0 3px 0 rgba(20, 40, 110, .55); transition: transform .12s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 5px; overflow: hidden; }
+.floors button i { flex: none; font-style: normal; font-weight: 900; font-size: 11px; letter-spacing: -.02em; line-height: 1; min-width: 20px; height: 18px; padding: 0 4px; box-sizing: border-box; display: inline-grid; place-items: center; border-radius: 6px; background: #1c3d8f; color: #fff; }
 .floors button:hover { background: #fff; }
 .floors button:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(20, 40, 110, .55); }
 .t-opts { display: flex; flex-direction: column; gap: 9px; }
@@ -427,8 +432,9 @@ button.mbtn:active { transform: scale(.98); }
   .mbtn { padding: 8px 12px; border-radius: 13px; }
   .mbtn b, .m-story b { font-size: 21px; }
   .mbtn small { font-size: 12px; }
-  .floors { margin-top: 6px; }
-  .floors button { min-height: 34px; font-size: 13px; }
+  .floors { margin-top: 6px; gap: 5px; }
+  .floors button { min-height: 34px; font-size: 12px; gap: 3px; padding: 0 3px; }
+  .floors button i { display: none; }
   .t-opts { gap: 8px; }
   .tg { min-height: 32px; }
   .t-help { grid-column: 2; font-size: 11.5px; }
@@ -448,8 +454,12 @@ button.mbtn:active { transform: scale(.98); }
   .touch #subtitle { --side: 16rem; }
   #banner { top: 26%; }
   .ev-panel { padding: 12px; }
-  #ev-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .ev-panel { width: min(480px, 100%); }
+  .ev-head { margin-bottom: 8px; }
+  #ev-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+  .ev-panel { width: min(520px, 100%); }
+  .ev-btn .fl { width: 36px; height: 36px; font-size: 16px; }
+  .ev-btn { padding: 3px 8px 3px 4px; }
+  .ev-btn .tx small { display: none; }
 }
 
 /* 흔들림 약하게 / 움직임 줄이기 */

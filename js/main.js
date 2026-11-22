@@ -6,11 +6,12 @@ import { makeCharacter } from './art/chars.js';
 import { makeProp } from './art/props.js';
 import { createGfx } from './gfx.js';
 import { createFx } from './fx.js';
-import { buildFloor, disposeFloor, setFloorSky, FLOOR_INFO } from './level.js';
+import { buildFloor, disposeFloor, setFloorSky, FLOOR_INFO, FLOOR_LIST, FLOOR_BY_ID, FLOORS, makeAny } from './level.js';
 import { createPhys, recUpright, syncRec } from './phys.js';
 import { collideCircle, NavGrid, pointInRect } from './nav.js';
 import { NPC } from './npc.js';
 import { instanceFloor } from './inst.js';
+import { createToys, WEAPON, RIDE } from './toys.js';
 
 const PI = Math.PI;
 const DEBUG = /debug/.test(location.hash);
@@ -32,7 +33,9 @@ const G = {
   counts: {}, taskPool: [], taskShown: [], obj: null, cand: null, focus: null, holdT: 0, needRelease: false,
   evPanel: null, timers: [], transN: 0, gen: 0, errors: [], shake: 0, frames: 0, fps: 0, impacts: [],
   floors: {}, S: null, floorKind: null, preset: 'day', queue: [], bestShown: 0,
+  fcounts: {}, chal: {}, run: null, evSel: null, thrust: 0,
 };
+let toys = null; // js/toys.js — created once the game helpers below exist
 const save = loadSave();
 function loadSave() {
   try { const s = JSON.parse(localStorage.getItem('ppg.save') || 'null'); if (s && typeof s === 'object') return { best: Object.assign({}, s.best || {}), days: s.days | 0 }; } catch (e) { /* ignore */ }
@@ -89,8 +92,14 @@ addEventListener('keydown', (e) => {
     return;
   }
   if (!playing()) return;
-  // elevator panel: 1 / 7 pick the floor without the mouse
-  if (G.evPanel && !e.repeat && /^(Digit|Numpad)[17]$/.test(c)) { onElevator(c.endsWith('1') ? 'lobby' : 'office'); e.preventDefault(); return; }
+  // elevator panel: each floor has a key (7 / 1 / 3 / 2 = 12층 / R / B = B1 / N = B2), arrows + Enter also work
+  if (G.evPanel) {
+    if (e.repeat && !c.startsWith('Arrow')) return;
+    const id = evKeyFloor(c);
+    if (id) { onElevator(id); e.preventDefault(); return; }
+    if (c === 'ArrowUp' || c === 'ArrowDown') { if (!e.repeat) moveEvSel(c === 'ArrowUp' ? -1 : 1); e.preventDefault(); return; }
+    if ((c === 'Enter' || c === 'NumpadEnter') && G.evSel) { onElevator(G.evSel); e.preventDefault(); return; }
+  }
   if (GAME_KEYS.has(c)) {
     if (c === 'Space' || c.startsWith('Arrow')) e.preventDefault();
     if (e.repeat) return;
@@ -221,6 +230,8 @@ function dropCarry() {
   return o;
 }
 function resetPlayer() {
+  if (toys && toys.riding()) toys.dismount();
+  if (toys) toys.reset();
   dropCarry();
   if (P.held) { const r = P.held; P.held = null; if (r.group.parent) r.group.parent.remove(r.group); r.removed = true; }
   P.seated = null; P.vel.set(0, 0, 0); P.vy = 0; P.y = 0; P.onGround = true; P.controls = true; P.rage = false; P.attackT = 0; P.push = null;
@@ -230,12 +241,15 @@ function resetPlayer() {
 
 // ================================================================ floors
 const SMALL_CAST = new Set(['keyboard', 'binders', 'phone', 'calendar', 'penCup', 'plantSmall', 'mug', 'paperStack', 'mouse', 'laptop', 'icedCoffee', 'hotCoffee', 'cupStack']);
+// props with set() states that may still be drawn through the instanced batch while untouched
+const BATCH_SET = new Set(['car', 'gate', 'barrierGate', 'coffeeTray']);
 function getFloor(kind) {
+  if (!FLOOR_BY_ID[kind]) kind = 'office';
   if (G.floors[kind]) return G.floors[kind];
   const t0 = performance.now();
   const F = buildFloor(kind, { low: TOUCH });
   const phys = createPhys(F);
-  F.instanced = instanceFloor(F, phys).meshes;
+  F.instanced = instanceFloor(F, phys, { batchSet: BATCH_SET }).meshes;
   // phones: the batched desk clutter does not cast shadows (barely visible, saves shadow-pass draws)
   if (TOUCH) for (const o of F.group.children) if (o.isInstancedMesh && SMALL_CAST.has(o.name.slice(5))) o.castShadow = false;
   const S = { kind, F, phys, npcs: [], walkers: [], nav: null, obst: [], lists: null, navT: 0, touched: false, used: G.mode !== 'title', buildMs: 0, ropes: [] };
@@ -281,7 +295,9 @@ function disposeFloors() {
 }
 function enterFloor(kind, { at = null, yaw = null, elevator = null } = {}) {
   const S = getFloor(kind);
+  kind = S.kind;
   if (G.S && G.S !== S) {
+    toys.onFloorLeave();
     scene.remove(G.S.F.group);
     for (const n of [...G.S.npcs, ...G.S.walkers]) ui.bubble(n.id, null);
   }
@@ -304,17 +320,31 @@ function enterFloor(kind, { at = null, yaw = null, elevator = null } = {}) {
   placePlayer();
   snapCamera();
   if (elevator != null) { CAM.yaw = P.yaw + 0.85; updateCamera(0, true); }
+  toys.prep(S);
+  floorHook(S, 'onEnter');
   return S;
+}
+// floor modules' escape hatch (see js/floors/README.md → hooks)
+function floorHook(S, name, ...args) {
+  const h = S && S.F.spec && S.F.spec.hooks && S.F.spec.hooks[name];
+  if (!h) return undefined;
+  try { return h(GAME, ...args); } catch (e) { report(e); return undefined; }
+}
+// light for a floor at a time of day: spec.light = null (follow time) | preset name | {preset, ...overrides} | fn(time)
+function floorLight(kind, name) {
+  const spec = FLOOR_BY_ID[kind], L = spec && spec.light;
+  if (!L) return name;
+  return typeof L === 'function' ? L(name) : L;
 }
 function applyTime(name) {
   G.preset = name;
-  gfx.applyPreset(G.floorKind === 'lobby' && name !== 'sunset' ? 'lobby' : name);
-  if (G.S) setFloorSky(G.S.F, gfx.PRESETS ? name : name);
+  gfx.applyPreset(floorLight(G.floorKind, name));
+  if (G.S) setFloorSky(G.S.F, name);
 }
 
 // ================================================================ camera
 const CAM = { yaw: PI, pitch: 0.3, dist: 3.7, tgt: V(), pos: V(), lastLook: -99, mode: 'follow', drift: 0, occ: 1 };
-function camDist() { const portrait = innerWidth < innerHeight; return (portrait ? 4.9 : 3.75) + (G.S && G.S.kind === 'lobby' ? 0.25 : 0); }
+function camDist() { const portrait = innerWidth < innerHeight; return (portrait ? 4.9 : 3.75) + (G.S && G.S.F.ceilY > 3.6 ? 0.25 : 0) + (toys && toys.riding() && toys.T.ride.kind === 'forklift' ? 1.0 : 0); }
 function snapCamera() {
   CAM.yaw = P.yaw; CAM.pitch = innerWidth < innerHeight ? 0.44 : 0.3;
   CAM.tgt.set(P.pos.x, 1.25, P.pos.z);
@@ -426,7 +456,7 @@ function toScreen(v) {
 }
 
 // ================================================================ story scenes
-const STORY_ORDER = ['copier', 'coffee', 'sunset', 'rampage', 'bill'];
+let STORY_ORDER = ['copier', 'coffee', 'sunset', 'rampage', 'bill'];
 const STORY = {
   copier: {
     info: { time: '오전 10:30', title: '복합기 용지 걸림', sub: '급한 인쇄 한 장이 안 나온다' },
@@ -551,6 +581,145 @@ const STORY = {
     skip() { G.phase = 'boil'; startRage(); },
   },
 };
+
+// ---- floor scenes: one extra situation per floor module (spec.scene), slotted into the day by its time.
+// Step vocabulary (README): mission, tasks, done, sub, say, sfx, stress, face, unseat, music, toast, npc, call,
+// and the blocking steps wait, goto (ride to a floor), walk (to a point), hold (hold-E on a thing), recMove.
+function clockHours(s) {
+  const m = /(오전|오후|낮|저녁|밤)?\s*(\d{1,2})\s*[:시]\s*(\d{1,2})?/.exec(s || '');
+  if (!m) return 99;
+  let h = +m[2]; if ((m[1] === '오후' || m[1] === '저녁' || m[1] === '밤') && h < 12) h += 12;
+  return h + (+(m[3] || 0)) / 60;
+}
+for (const f of FLOORS) {
+  const sc = f.scene;
+  if (!sc || !sc.steps) continue;
+  const id = sc.id || 'floor:' + f.id;
+  STORY[id] = {
+    info: { time: sc.time, title: sc.title, sub: sc.sub || '' }, floorScene: f.id,
+    setup() {
+      const st = sc.start || {};
+      G.preset = st.preset || 'day';
+      const fl = st.floor || f.id;
+      const S = enterFloor(fl);
+      resetPlayer();
+      if (st.seat && S.F.anchors[st.seat]) seatPlayer(S.F.anchors[st.seat]);
+      else {
+        const p = anchorPos(S, st.at) || S.F.anchors.spawn;
+        P.pos.set(p.x, 0, p.z); P.yaw = st.yaw != null ? st.yaw : (S.F.anchors.spawnYaw || 0); placePlayer();
+      }
+      snapCamera();
+      const boss = npcByRole(S, 'boss');
+      if (boss && S.F.anchors.bossStand) resetNpc(boss, S.F.anchors.bossStand, S.F.anchors.bossStandYaw || 0, 'idle', 'smug');
+      audio.music(st.music || f.music || 'office');
+      if (st.stress != null) setStress(Math.max(G.stress, st.stress), false);
+      hudStory();
+      G.run = { steps: sc.steps, i: 0, t: 0, floor: fl, started: false, ended: false, sceneId: id };
+      phase('s0');
+    },
+    update(dt) { runSteps(dt); },
+    skip() { G.run = null; sceneNext(); },
+  };
+}
+STORY_ORDER = Object.keys(STORY).sort((a, b) => clockHours(STORY[a].info.time) - clockHours(STORY[b].info.time)).concat(['rampage', 'bill']);
+
+function anchorPos(S, a) {
+  if (!a) return null;
+  if (Array.isArray(a)) return V(a[0], 0, a[1]);
+  if (a.isVector3) return a;
+  const v = S.F.anchors[a];
+  return v && v.isVector3 ? v : v && v.x != null ? V(v.x, 0, v.z) : null;
+}
+function findNpc(who, S = G.S) {
+  if (!S || !who) return null;
+  if (typeof who !== 'string') return who;
+  return S.npcs.find((n) => n.role === who) || S.npcs.find((n) => n.id === who || n.spec.name === who) || null;
+}
+function recByTag(tag, S = G.S) { return S ? S.phys.records.find((r) => r.tag === tag && !r.removed) || null : null; }
+function runSteps(dt) {
+  const R = G.run;
+  if (!R || R.ended) return;
+  for (let guard = 0; guard < 40 && R.i < R.steps.length; guard++) {
+    const s = R.steps[R.i];
+    if (!R.started) { R.started = true; R.t = 0; R.holdDone = false; try { startStep(s, R); } catch (e) { report(e); } }
+    let done = true;
+    try { done = stepDone(s, R, dt); } catch (e) { report(e); }
+    if (!done) { R.t += dt; return; }
+    R.i++; R.started = false;
+    phase('s' + R.i);
+  }
+  if (R.i >= R.steps.length) { R.ended = true; objective(null); sceneNext(); }
+}
+function startStep(s, R) {
+  if (s.mission) ui.mission(s.mission);
+  if (s.tasks) setTasks(s.tasks.map((t) => (typeof t === 'string' ? { text: t } : t)));
+  if (s.done != null) doneTask(s.done);
+  if (s.sub) ui.subtitle(s.sub[0], s.sub[1], s.sub[2] || 2600);
+  if (s.say) { const n = findNpc(s.say[0]); if (n) { n.say(s.say[1], s.say[2] || 2.6, G.rtime); sfx('mumble', { vol: 0.5 }); } }
+  if (s.sfx) sfx(s.sfx, { vol: 0.65 });
+  if (s.stress) setStress(typeof s.stress === 'string' && s.stress[0] === '=' ? +s.stress.slice(1) : G.stress + s.stress);
+  if (s.face) setFace(s.face[0], s.face[1] || 1.5);
+  if (s.unseat) unseat();
+  if (s.music) audio.music(s.music);
+  if (s.toast) ui.toast(s.toast, 2000);
+  if (s.npc) {
+    const o = s.npc, n = findNpc(o.who);
+    if (n) {
+      if (o.walk) { const p = anchorPos(G.S, o.walk); if (p) n.walkTo(npcCtx(), p.x, p.z, { speed: o.speed || 1.3, anim: o.anim || 'walk', onArrive: () => { n.char.setAnim(o.arrive || 'idle'); n.yaw = Math.atan2(P.pos.x - n.pos.x, P.pos.z - n.pos.z); } }); }
+      else { if (o.anim) n.char.setAnim(o.anim); if (o.look === 'player') n.yaw = Math.atan2(P.pos.x - n.pos.x, P.pos.z - n.pos.z); }
+      if (o.face) n.char.setFace(o.face);
+      if (o.say) n.say(o.say, 2.6, G.rtime);
+    }
+  }
+  if (s.recMove) {
+    const rec = recByTag(s.recMove.tag);
+    if (rec) {
+      G.S.phys.setKinematic(rec, true); rec.riding = true;
+      const p = rec.body.position;
+      R.move = { rec, x0: p.x, z0: p.z, x1: p.x + (s.recMove.dx || 0), z1: p.z + (s.recMove.dz || 0), sec: s.recMove.sec || 1 };
+    }
+  }
+  if (s.call) s.call(GAME);
+  if (!s.recMove) R.move = null;
+}
+function stepDone(s, R, dt) {
+  const S = G.S;
+  if (s.recMove && R.move) {
+    const M2 = R.move, k = Math.min(1, (R.t + dt) / M2.sec), e = k * k * (3 - 2 * k);
+    M2.rec.body.position.x = M2.x0 + (M2.x1 - M2.x0) * e; M2.rec.body.position.z = M2.z0 + (M2.z1 - M2.z0) * e;
+    syncRec(M2.rec);
+    if (k < 1) return false;
+    M2.rec.riding = false; S.phys.setKinematic(M2.rec, false); M2.rec.body.velocity.set(0, 0, 0); M2.rec.body.sleep(); syncRec(M2.rec);
+    R.move = null;
+    rebuildNav(S);
+    return true;
+  }
+  if (s.wait != null) return R.t >= s.wait;
+  if (s.goto) {
+    if (G.floorKind === s.goto) { R.floor = s.goto; objective(null); return true; }
+    objective(elevatorObjective(s.goto));
+    return false;
+  }
+  if (s.walk || s.hold) {
+    if (G.floorKind !== R.floor) { objective(elevatorObjective(R.floor)); return false; }
+    if (s.walk) {
+      const p = anchorPos(S, s.walk.to) || (findNpc(s.walk.to) || {}).pos;
+      if (!p) return true;
+      objective({ pos: p.clone(), h: 2.3 });
+      if (Math.hypot(P.pos.x - p.x, P.pos.z - p.z) < (s.walk.r || 0.8)) { objective(null); return true; }
+      return false;
+    }
+    const o = s.hold;
+    const rec = o.tag ? recByTag(o.tag) : null, n = o.who ? findNpc(o.who) : null;
+    const tp = rec ? V(rec.body.position.x, 0, rec.body.position.z) : n ? n.pos.clone() : anchorPos(S, o.at);
+    if (!tp) return true;
+    const at = anchorPos(S, o.at) || tp;
+    if (R.holdDone) { objective(null); return true; }
+    objective({ pos: at.clone(), h: 2.3, cand: { id: 'step' + R.i, pos: at.clone(), h: o.h || 1.5, obj: rec ? rec.group : n ? n.group : null, text: o.text || '하기', hold: o.sec != null ? o.sec : 0.8, range: o.range || (o.at ? 1.4 : 2.2), onDone: () => { R.holdDone = true; P.char.playOnce(o.anim || 'take'); } } });
+    return false;
+  }
+  return true;
+}
 function phase(p) { G.phase = p; G.phaseT = 0; }
 function sceneNext() {
   const i = STORY_ORDER.indexOf(G.scene);
@@ -794,25 +963,15 @@ function objective(o) {
 }
 
 // ================================================================ rampage
-const TASKS_OFFICE = [
-  { text: '책상 뒤집기 3개', key: 'flip', need: 3, bonus: 50000 },
-  { text: '모니터 5대 부수기', key: 'monitor', need: 5, bonus: 50000 },
-  { text: '복합기 부수기', key: 'printer', need: 1, bonus: 80000 },
-  { text: '화분 걷어차기 3개', key: 'plantKick', need: 3, bonus: 30000 },
-  { text: '의자 날리기 5개', key: 'chairHit', need: 5, bonus: 30000 },
-  { text: '서류 흩날리기 30장', key: 'paper', need: 30, bonus: 20000 },
-  { text: '정수기 쓰러뜨리기', key: 'waterCooler', need: 1, bonus: 30000 },
-  { text: '필살기 쓰기', key: 'special', need: 1, bonus: 40000 },
+// generic challenges (floor spec.challenges): { id, text, kind, n?, type?, tag?, key?, bonus }
+//   break / flip / out / ram / hit / weapon / knock / alarm / fly / shout / lift → counters emitted below
+//   carStage (n = stage reached, 1 glass … 4 wreck) / count (legacy counter `key`: paper, coffee, special…)
+const DEFAULT_CHALLENGES = [
+  { id: 'd1', text: '아무거나 10개 부수기', kind: 'break', n: 10, bonus: 40000 },
+  { id: 'd2', text: '사람 3명 날리기', kind: 'knock', n: 3, bonus: 30000 },
+  { id: 'd3', text: '필살기 쓰기', kind: 'count', key: 'special', bonus: 40000 },
 ];
-const TASKS_LOBBY = [
-  { text: '커피 엎기 6잔', key: 'coffee', need: 6, bonus: 40000 },
-  { text: '차단봉 쓰러뜨리기 4개', key: 'stanchion', need: 4, bonus: 30000 },
-  { text: '소파 날리기', key: 'sofaHit', need: 1, bonus: 40000 },
-  { text: '화분 걷어차기 3개', key: 'plantKick', need: 3, bonus: 30000 },
-  { text: '카페 의자 날리기 4개', key: 'cafeChairHit', need: 4, bonus: 30000 },
-  { text: '에스프레소 머신 부수기', key: 'espresso', need: 1, bonus: 80000 },
-  { text: '필살기 쓰기', key: 'special', need: 1, bonus: 40000 },
-];
+function chalKey(c) { return c.kind === 'count' ? c.key : c.kind + (c.tag ? '#' + c.tag : c.type ? ':' + c.type : ''); }
 // tiers for a person playing one minute (≈0.6–1.2M won); the scripted bot does ~2.5–3M
 const RANKS = [
   [0, '모범 사원', '부순 게 거의 없네요. 내일도 출근하실 거죠?'],
@@ -823,13 +982,14 @@ const RANKS = [
   [1500000, '전설의 퇴사 예정자', '사내 게시판에 당신 이름이 올라왔어요.'],
   [2400000, '회사 뿌개기 장인', '건물주가 직접 전화를 걸어 왔습니다.'],
 ];
-const DESKS = new Set(['desk', 'deskL', 'meetingTable', 'roundTable']);
+const DESKS = new Set(['desk', 'deskL', 'meetingTable', 'roundTable', 'grilltable', 'podium', 'ceoDesk']);
+const flippable = (r) => DESKS.has(r.type) || !!(r.sp && r.sp.flip);
 const PAPERY = new Set(['desk', 'deskL', 'printer', 'paperStack', 'binders', 'binderStack', 'paperBox', 'shelf', 'cabinet', 'cabinetTall', 'whiteboard', 'meetingTable']);
 const BREAK_SFX = { wood: 'breakWood', glass: 'breakGlass', metal: 'breakMetal', plastic: 'breakPlastic', ceramic: 'breakCeramic' };
 const HIT_SFX = { wood: 'hitWood', glass: 'hitGlass', metal: 'hitMetal', plastic: 'hitPlastic', soft: 'hitSoft', paper: 'hitPaper', ceramic: 'hitCeramic', plant: 'hitPlant' };
 
 function resetDamage() {
-  G.money = 0; G.items = new Map(); G.combo = 0; G.comboT = 0; G.special = 0; G.counts = {};
+  G.money = 0; G.items = new Map(); G.combo = 0; G.comboT = 0; G.special = 0; G.counts = {}; G.fcounts = {}; G.chal = {};
   ui.combo(0); ui.special(0);
 }
 function startRampage() {
@@ -854,22 +1014,32 @@ function startRampage() {
   // the yell startles people nearby
   after(0.4, () => alarmAt(P.pos, 5.5));
 }
+// each floor keeps its own challenge pool (and progress) for the whole run
 function initTasks(kind) {
-  G.taskPool = (kind === 'lobby' ? TASKS_LOBBY : TASKS_OFFICE).map((t) => Object.assign({ done: false, doneAt: 0 }, t));
-  // rotate the order a little so runs differ
-  const k = (Math.random() * 3) | 0;
-  G.taskPool = G.taskPool.slice(k).concat(G.taskPool.slice(0, k));
-  G.taskShown = G.taskPool.slice(0, 2);
+  let C = G.chal[kind];
+  if (!C) {
+    const spec = FLOOR_BY_ID[kind];
+    let pool = ((spec && spec.challenges && spec.challenges.length ? spec.challenges : DEFAULT_CHALLENGES)).map((t) => Object.assign({ done: false, doneAt: 0, need: t.n || 1, key: chalKey(t) }, t, { key: chalKey(t) }));
+    // rotate the order a little so runs differ
+    const k = (Math.random() * Math.min(3, pool.length)) | 0;
+    pool = pool.slice(k).concat(pool.slice(0, k));
+    C = G.chal[kind] = { pool, shown: pool.filter((t) => !t.done).slice(0, 2) };
+  }
+  G.taskPool = C.pool; G.taskShown = C.shown;
   refreshTasks();
 }
-function refreshTasks() { ui.tasks(G.taskShown.map((t) => ({ text: t.text, done: t.done, plain: true }))); }
+function refreshTasks() { ui.tasks(G.taskShown.map((t) => ({ text: t.need > 1 && !t.done ? `${t.text} (${Math.min(t.need, chalProgress(t))}/${t.need})` : t.text, done: t.done, plain: true }))); }
+function chalProgress(t) { const fc = G.fcounts[G.floorKind] || {}; return fc[t.key] || 0; }
 function checkTasks() {
   let changed = false;
-  for (const t of G.taskShown) {
-    if (!t.done && (G.counts[t.key] || 0) >= t.need) {
+  // every challenge of the floor completes when reached (shown or not); the two chips then rotate
+  for (const t of G.taskPool) {
+    const p = chalProgress(t);
+    if (t.need > 1 && !t.done && p !== t.shownP && G.taskShown.includes(t)) { t.shownP = p; changed = true; }
+    if (!t.done && p >= t.need) {
       t.done = true; t.doneAt = G.rtime; changed = true;
       addMoney(t.bonus, null, true);
-      addItem('난동 목표 보너스', t.bonus);
+      addItem('목표 보너스 · ' + t.text, t.bonus);
       ui.toast(`${t.text} 달성! 보너스 +${fmt(t.bonus)}원`, 2000);
       sfx('check', { vol: 0.8 });
     }
@@ -883,7 +1053,22 @@ function checkTasks() {
   }
   if (changed) refreshTasks();
 }
-function count(key, n = 1) { G.counts[key] = (G.counts[key] || 0) + n; }
+function count(key, n = 1) {
+  G.counts[key] = (G.counts[key] || 0) + n;
+  const fc = G.fcounts[G.floorKind] || (G.fcounts[G.floorKind] = {});
+  fc[key] = (fc[key] || 0) + n;
+}
+// challenge events: bumps `kind`, `kind:type` and `kind#tag`. value → max semantics (carStage)
+function emit(kind, rec = null, n = 1, value = null) {
+  const keys = [kind];
+  if (rec && rec.type) keys.push(kind + ':' + rec.type);
+  if (rec && rec.tag) keys.push(kind + '#' + rec.tag);
+  const fc = G.fcounts[G.floorKind] || (G.fcounts[G.floorKind] = {});
+  for (const k of keys) {
+    if (value != null) { G.counts[k] = Math.max(G.counts[k] || 0, value); fc[k] = Math.max(fc[k] || 0, value); }
+    else { G.counts[k] = (G.counts[k] || 0) + n; fc[k] = (fc[k] || 0) + n; }
+  }
+}
 function addItem(name, amount) {
   const it = G.items.get(name) || { name, count: 0, amount: 0 };
   it.count++; it.amount += amount; G.items.set(name, it);
@@ -910,6 +1095,10 @@ function recPos(r, out = V()) { const p = r.body.position; return out.set(p.x, p
 function hitRec(rec, dmg, dir, power, opts = {}) {
   const S = G.S, b = rec.body;
   S.touched = true;
+  // wall / ceiling mounted things come loose on the first hit
+  if (rec.hang && rec.fixed && (dmg > 0 || power > 1)) S.phys.release(rec);
+  // fixtures don't move; cars only rock (their wreck is staged, see toys.js); a ridden thing is driven
+  if (rec.fixed || rec.riding || rec.type === 'car') power = 0;
   b.wakeUp();
   if (power > 0) {
     const m = Math.max(0.3, rec.mass);
@@ -929,6 +1118,7 @@ function hitRec(rec, dmg, dir, power, opts = {}) {
   if ((rec.type === 'sofa' || rec.type === 'sofaYellow') && !rec.kicked) { rec.kicked = true; count('sofaHit'); }
   if (rec.type === 'stanchion' && !rec.kicked) { rec.kicked = true; count('stanchion'); }
   if (rec.material === 'plant' && opts.kick && !rec.kicked) { rec.kicked = true; count('plantKick'); }
+  if (!rec.hitOnce && (dmg > 0 || power > 0.5)) { rec.hitOnce = true; emit('hit', rec); }
   if (!rec.destroyed) {
     const before = rec.hp;
     rec.hp -= dmg;
@@ -937,6 +1127,7 @@ function hitRec(rec, dmg, dir, power, opts = {}) {
     rec.paid += amt;
     if (opts.direct) { G.combo++; G.comboT = 1.5; ui.combo(G.combo); }
     if (amt > 0) addMoney(amt, V(c.x, c.y + rec.hy + 0.2, c.z), false, !!opts.direct);
+    if (dmg > 0) toys.afterHit(rec);
     if (rec.hp <= 0) destroyRec(rec, dir, { charge: !!opts.direct });
   }
   alarmAt(c, 9);
@@ -947,24 +1138,30 @@ function hitRec(rec, dmg, dir, power, opts = {}) {
 function destroyRec(rec, dir, { flip = false, charge = false } = {}) {
   if (rec.destroyed) return;
   rec.destroyed = true;
+  if (rec.inst) rec.inst(rec); // fixtures never moved, so they may still be in the instanced batch
   const rest = Math.max(0, rec.price - rec.paid);
   rec.paid = rec.price;
   addItem(rec.name, rec.price);
   const c = recPos(rec, V());
   if (rest > 0) addMoney(rest, V(c.x, c.y + rec.hy + 0.35, c.z), false, charge || flip);
   count(rec.type);
+  if (!flip) emit('break', rec);
   if (rec.type === 'icedCoffee' || rec.type === 'hotCoffee') count('coffee');
   if (rec.type === 'coffeeTray') count('coffee', 6);
   if (rec.type === 'mug') count('coffee');
+  let keepLook = false;
   if (!flip) {
     sfx(BREAK_SFX[rec.material] || 'crash', { vol: 0.85, pitch: rnd(0.92, 1.08) });
-    fx.debris(c, rec.colors, rec.mass > 15 ? 16 : 10, 3, Math.min(0.12, 0.035 + Math.cbrt(rec.mass) * 0.015));
+    fx.debris(c, rec.colors, rec.mass > 15 ? 16 : 10, 3, Math.min(0.12, 0.035 + Math.cbrt(Math.max(1, rec.mass)) * 0.015));
     fx.sparks(c, 12, 5);
     if (PAPERY.has(rec.type)) count('paper', fx.papers(V(c.x, c.y + 0.4, c.z), 6, 2.4));
+    try { keepLook = toys.onDestroy(rec); } catch (e) { report(e); }
+    floorHook(G.S, 'onDestroy', rec);
   }
-  if (rec.mass < 15 && !rec.heavy && !flip) {
+  const remove = rec.prop.floats || (!rec.fixed && rec.mass < 15 && !rec.heavy);
+  if (remove && !flip) {
     G.removeQ.push(rec);
-  } else if (!flip) {
+  } else if (!flip && !keepLook) {
     // keep the wreck, a little darker
     rec.group.traverse((m) => {
       if (!m.isMesh || !m.material || Array.isArray(m.material)) return;
@@ -1005,9 +1202,9 @@ function pickTarget(range, includeNpc = true) {
   const S = G.S, f = facing();
   let best = null, bs = 1e9, kind = null;
   for (const r of S.phys.records) {
-    if (r.removed || r.held || r.destroyed && r.mass < 15) continue;
+    if (r.removed || r.held || r.riding || r.out || r.destroyed && r.mass < 15) continue;
     const p = r.body.position;
-    if (p.y > 2.2) continue;
+    if (p.y > (r.hang ? 2.8 : 2.2)) continue;
     const dx = p.x - P.pos.x, dz = p.z - P.pos.z;
     const reach = range + Math.min(0.6, Math.max(r.hx, r.hz) * 0.7);
     const d = Math.hypot(dx, dz);
@@ -1031,6 +1228,7 @@ function pickTarget(range, includeNpc = true) {
 function aimAt(p) { P.yaw = Math.atan2(p.x - P.pos.x, p.z - P.pos.z); }
 function attack(kind) {
   if (P.attackT > 0 || P.seated || G.busy || !P.controls && G.rampage === false) return;
+  if (G.canDamage && toys.attack(kind)) return; // riding (forklift fork) or swinging a held weapon
   if (P.held) { throwHeld(); return; }
   if (P.carry) return;
   if (!G.canDamage) {
@@ -1053,12 +1251,15 @@ function attack(kind) {
 function resolveHit(kind) {
   if (!G.canDamage || !G.S) return;
   const tg = pickTarget(kind === 'kick' ? 2.0 : 1.85);
+  // a window right in front of you (and nothing closer) shatters
+  if (!tg || (tg.kind === 'rec' && Math.hypot(tg.t.body.position.x - P.pos.x, tg.t.body.position.z - P.pos.z) > 1.3)) { if (toys.punchWindow(1.25)) return; }
   if (!tg) return;
   const power = kind === 'kick' ? 2.3 : 1.25;
   if (tg.kind === 'npc') {
     const n = tg.t;
     const dir = V(n.pos.x - P.pos.x, 0, n.pos.z - P.pos.z).normalize();
     if (n.knock(npcCtx(), dir, kind === 'kick' ? 1.3 : 0.8)) {
+      emit('knock');
       sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.8 });
       fx.sparks(V(n.pos.x, 1.1, n.pos.z), 8, 3);
       G.shake = Math.max(G.shake, 0.35); G.hitStop = Math.max(G.hitStop, 0.06);
@@ -1106,7 +1307,7 @@ function flipDesk(rec) {
   count('paper', fx.papers(V(c.x, 1.0, c.z), 8, 2.2));
   fx.debris(c, rec.colors, 6, 2.5, 0.05);
   destroyRec(rec, d, { flip: true });
-  count('flip');
+  emit('flip', rec); // counts 'flip', 'flip:<type>'
   G.combo++; G.comboT = 1.5; ui.combo(G.combo);
   G.shake = Math.max(G.shake, 0.7); G.hitStop = Math.max(G.hitStop, 0.07);
   vibrate(45);
@@ -1117,7 +1318,7 @@ function pickUp(rec) {
   if (rec.removed || rec.held) return;
   S.phys.detach(rec);
   rec.group.matrixAutoUpdate = true;
-  const both = rec.mass > 2.5 || rec.prop.size.y > 0.4;
+  const both = !WEAPON[rec.type] && (rec.mass > 2.5 || rec.prop.size.y > 0.4);
   P.char.hold(rec.group, { both });
   if (!both) rec.group.position.set(0, -0.05, 0.02);
   P.held = rec; P.heldBoth = both;
@@ -1143,7 +1344,9 @@ function throwHeld() {
   P.attackT = 0.35;
 }
 function special() {
-  if (G.special < 1 || !G.canDamage || P.seated) return;
+  if (!G.canDamage || P.seated) return;
+  if (toys.special()) return; // megaphone: Q shouts
+  if (G.special < 1) return;
   G.special = 0; G.specialReadyShown = false; ui.special(0);
   count('special');
   P.char.playOnce('special');
@@ -1157,19 +1360,21 @@ function special() {
     if (!ui.settings.calm) ui.flash('#ffe08a', 260);
     vibrate(120);
     for (const r of S.phys.records) {
-      if (r.removed || r.held) continue;
+      if (r.removed || r.held || r.riding || r.out) continue;
       const p = r.body.position;
       const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz);
       if (d > 6.2) continue;
       const dir = d > 0.01 ? V(dx / d, 0, dz / d) : V(1, 0, 0);
       const k = 1 - d / 6.5;
-      hitRec(r, 1, dir, 2.2 + k * 3.2, { shake: false, vol: 0.35 });
+      hitRec(r, r.type === 'car' ? 3 : 1, dir, 2.2 + k * 3.2, { shake: false, vol: 0.35 });
     }
+    // windows within reach shatter too
+    for (const W of S.F.windows) for (const b of W.bays) if (b.intact && Math.hypot(b.x - c.x, b.z - c.z) < 4.5) toys.breakBay(S, W, b, true);
     const ctx = npcCtx();
     for (const n of S.npcs) {
       if (n.gone) continue;
       const d = n.pos.distanceTo(c);
-      if (d < 7) n.knock(ctx, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.4 * (1 - d / 8));
+      if (d < 7 && n.knock(ctx, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.4 * (1 - d / 8))) emit('knock');
     }
     sfx('crash', { vol: 1 });
   });
@@ -1177,13 +1382,17 @@ function special() {
 
 // ---- interact candidates during the rampage
 function rampageCandidate() {
+  const tc = toys.candidate(); // ride / get off / fire alarm (scored, competes with desks + pick-ups below)
+  if (tc && tc.id === 'ride-off') return tc;
+  const fc = floorHook(G.S, 'candidate');
+  if (fc) return fc;
   if (P.held) return null;
   const S = G.S, f = facing();
   let best = null, bs = 1e9;
   for (const r of S.phys.records) {
-    if (r.removed || r.held) continue;
-    const isDesk = DESKS.has(r.type) && !r.flipped && recUpright(r) > 0.9;
-    const canPick = r.mass <= 8 && !isDesk && r.price > 0;
+    if (r.removed || r.held || r.fixed || r.riding || r.out) continue;
+    const isDesk = flippable(r) && !r.flipped && recUpright(r) > 0.9;
+    const canPick = r.mass <= 8 && !isDesk && r.price > 0 && !RIDE[r.type];
     if (!isDesk && !canPick) continue;
     const p = r.body.position;
     const dx = p.x - P.pos.x, dz = p.z - P.pos.z;
@@ -1195,11 +1404,12 @@ function rampageCandidate() {
     const s = d + a * 0.8 + (isDesk ? -0.2 : 0);
     if (s < bs) { bs = s; best = r; }
   }
+  if (tc && tc.score < bs) return tc;
   if (!best) return null;
-  const isDesk = DESKS.has(best.type);
+  const isDesk = flippable(best) && !best.flipped;
   return {
     id: 'rec' + best.id, rec: best, pos: V(best.body.position.x, 0, best.body.position.z), h: isDesk ? 0.55 : best.body.position.y + 0.15, obj: best.group,
-    text: isDesk ? '엎기' : '집기', hold: isDesk ? 0.42 : 0, range: 99, onDone: () => (isDesk ? flipDesk(best) : pickUp(best)),
+    text: isDesk ? '엎기' : WEAPON[best.type] ? '들기' : '집기', hold: isDesk ? 0.42 : 0, range: 99, onDone: () => (isDesk ? flipDesk(best) : pickUp(best)),
   };
 }
 
@@ -1266,11 +1476,30 @@ function updateElevators(dt) {
     if (inside && !ev.dismissed && !G.evPanel && !G.busy && G.scene !== 'bill' && G.mode !== 'title' && ev.open > 0.6 && !ev.closing) {
       G.evPanel = ev;
       releaseLock(); // the floor buttons need a visible cursor
-      ui.elevator({ current: G.floorKind, floors: [FLOOR_INFO.office, FLOOR_INFO.lobby] });
+      G.evSel = null;
+      ui.elevator(evPanelData());
       sfx('ui', { vol: 0.5 });
     }
     if (!inside) { ev.dismissed = false; if (G.evPanel === ev) { G.evPanel = null; ui.elevator(null); } }
   }
+}
+// all seven floors, top to bottom, with their keyboard shortcut
+const KEY_LABEL = { Digit7: '7', Digit1: '1', Digit2: '2', Digit3: '3', KeyR: 'R', KeyB: 'B', KeyN: 'N' };
+function evPanelData() {
+  return { current: G.floorKind, sel: G.evSel, floors: FLOOR_LIST.map((f) => Object.assign({}, f, { keyLabel: TOUCH ? null : KEY_LABEL[f.key] || null })) };
+}
+function evKeyFloor(code) {
+  const c = code.replace(/^Numpad(\d)$/, 'Digit$1');
+  const f = FLOOR_LIST.find((x) => x.key === c);
+  return f ? f.id : null;
+}
+function moveEvSel(d) {
+  const ids = FLOOR_LIST.map((f) => f.id);
+  let i = ids.indexOf(G.evSel || G.floorKind);
+  i = clamp(i + d, 0, ids.length - 1);
+  G.evSel = ids[i];
+  ui.elevator(evPanelData());
+  sfx('ui', { vol: 0.35 });
 }
 function onElevator(id) {
   const ev = G.evPanel; G.evPanel = null;
@@ -1293,8 +1522,8 @@ function ride(ev, dest) {
       enterFloor(dest, { elevator: idx });
       P.controls = true;
       if (G.rampage) {
-        ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: FLOOR_INFO[dest].name, tone: 'rage' });
-        if (G.mode === 'free') initTasks(dest);
+        ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: FLOOR_INFO[G.floorKind].name, tone: 'rage' });
+        initTasks(G.floorKind);
       }
     }, 700);
   };
@@ -1360,6 +1589,7 @@ function updatePlayer(dt) {
     }
   }
   if (!P.controls || G.busy) { mx = 0; mz = 0; }
+  if (toys.riding()) { toys.updateRide(dt, mx, mz); return; }
   const carrying = !!P.carry || (P.held && P.heldBoth);
   const vmax = carrying ? 1.9 : (G.rampage || G.mode === 'free' ? 4.7 : 3.0);
   const tx = mx * vmax, tz = mz * vmax;
@@ -1371,6 +1601,9 @@ function updatePlayer(dt) {
     if (d.length() < 0.06) P.push = null; else { d.clampLength(0, dt * 2.2); P.pos.add(d); }
   }
   P.pos.x += P.vel.x * dt; P.pos.z += P.vel.z * dt;
+  // extinguisher recoil
+  const sv = toys.sprayPush();
+  if (sv.x || sv.z) { P.pos.x += sv.x * dt; P.pos.z += sv.z * dt; }
   // collisions: static + heavy props + people
   collideCircle(P.pos, P.r, S.lists, P.y);
   for (const n of S.npcs) {
@@ -1387,6 +1620,7 @@ function updatePlayer(dt) {
     IN.jumpQ = 0;
     if (P.onGround && P.controls && !G.busy && !P.carry) { P.vy = 6.0; P.onGround = false; c.playOnce('jump'); sfx('jump', { vol: 0.45 }); }
   }
+  if (G.thrust > 0) { P.onGround = false; P.vy = Math.min(Math.max(P.vy, G.thrustMax), P.vy + G.thrust * dt); }
   if (!P.onGround) {
     P.vy -= 18 * dt; P.y += P.vy * dt;
     if (P.y <= 0) { P.y = 0; P.vy = 0; P.onGround = true; c.playOnce('land'); sfx('land', { vol: 0.5 }); }
@@ -1402,7 +1636,7 @@ function updatePlayer(dt) {
   // footsteps
   if (P.onGround && P.speed > 0.5) {
     P.stepD += P.speed * dt;
-    if (P.stepD > (P.speed > 3.2 ? 0.95 : 0.7)) { P.stepD = 0; sfx(S.kind === 'office' ? 'stepCarpet' : 'step', { vol: 0.22, pitch: rnd(0.9, 1.1) }); }
+    if (P.stepD > (P.speed > 3.2 ? 0.95 : 0.7)) { P.stepD = 0; sfx((S.F.spec && S.F.spec.stepSfx) || 'step', { vol: 0.22, pitch: rnd(0.9, 1.1) }); }
   }
   placePlayer();
   S.phys.setPlayer(P.pos.x, P.y, P.pos.z, (P.pos.x - P.prev.x) / dt, P.onGround ? 0 : P.vy, (P.pos.z - P.prev.z) / dt);
@@ -1434,7 +1668,7 @@ function updateInteract(dt) {
   } else if (P.held && press && !G.needRelease) { G.needRelease = !(_bot && _bot.on); throwHeld(); }
   if (_bot && _bot.on && _bot.interact && cand && cand.hold === 0) _bot.interact = false;
 }
-function fire(c) { try { c.onDone(); } catch (e) { report(e); } G.focus = null; }
+function fire(c) { try { c.onDone(); } catch (e) { report(e); } floorHook(G.S, 'onInteract', c); G.focus = null; }
 
 // ================================================================ main tick
 function tick(dt) {
@@ -1463,6 +1697,10 @@ function tick(dt) {
     if (IN.specialQ > 0 || (botA && _bot.special)) { IN.specialQ = 0; if (G.canDamage) special(); else if (G.mode === 'story') { /* nothing yet */ } }
   } else { IN.attackQ = 0; IN.kickQ = 0; IN.specialQ = 0; }
 
+  // toys: extinguisher spray (hold attack), sprinkler rain, windows / out-throws (before physics)
+  const attackDown = G.mode !== 'title' && !G.busy && P.controls && (IN.attack || !!(_bot && _bot.on && (_bot.attack || _bot.spray)));
+  const tu = toys.update(gdt, attackDown);
+  G.thrust = tu.thrust; G.thrustMax = tu.vmax || 3;
   updatePlayer(gdt > 0 ? gdt : rdt * 0.06);
   updateInteract(rdt);
   // physics
@@ -1480,10 +1718,19 @@ function tick(dt) {
         if (n.gone || n.state === 'air' || n.state === 'down') continue;
         if (p.y > 1.9) continue;
         const dx = n.pos.x - p.x, dz = n.pos.z - p.z;
-        if (dx * dx + dz * dz < 0.36) n.knock(npcCtx(), V(v.x, 0, v.z).normalize(), 0.7);
+        if (dx * dx + dz * dz < 0.36 && n.knock(npcCtx(), V(v.x, 0, v.z).normalize(), 0.7)) emit('knock');
       }
     }
   }
+  // idle chatter (spec.lines) when you walk past, outside the rampage
+  if (!G.rampage && G.mode !== 'title') {
+    for (const n of S.npcs) {
+      const L = n.spec.lines;
+      if (!L || !L.length || n.gone || n.panicked || (n.nextLine || 0) > G.rtime || (n.bubble && n.bubble.until > G.rtime)) continue;
+      if (n.pos.distanceTo(P.pos) < 2.6) { n.say(L[(Math.random() * L.length) | 0], 2.4, G.rtime); n.nextLine = G.rtime + 8; }
+    }
+  }
+  floorHook(S, 'onTick', gdt);
   // obstacles + nav refresh
   S.phys.obstacles(S.obst);
   S.navT += rdt;
@@ -1531,7 +1778,8 @@ function frameUI() {
     gfx.highlight(f.obj, G.rtime);
   } else if (P.held && G.mode !== 'title' && G.scene !== 'bill') {
     const s = toScreen(V(P.pos.x, 1.9, P.pos.z));
-    if (s) ui.prompt({ key: TOUCH ? '때리기' : '클릭', text: '던지기', x: s.x + 80, y: s.y, hold: 0 }); else ui.prompt(null);
+    const wt = toys.heldText();
+    if (s) ui.prompt(wt ? { key: TOUCH ? '때리기' : '클릭', text: wt + (TOUCH ? '' : ' · E 던지기'), x: s.x + 90, y: s.y, hold: 0 } : { key: TOUCH ? '때리기' : '클릭', text: '던지기', x: s.x + 80, y: s.y, hold: 0 }); else ui.prompt(null);
     gfx.highlight(null, 0);
   } else { ui.prompt(null); gfx.highlight(null, 0); }
   // bubbles
@@ -1603,11 +1851,12 @@ function start(mode, opts = {}) {
     });
   }
   if (mode === 'free') {
-    const fl = G.opts.floor === 'lobby' ? 'lobby' : 'office';
+    const fl = FLOOR_BY_ID[G.opts.floor] ? G.opts.floor : 'office';
     return transition({ time: fl === 'lobby' ? '낮 12:30' : '오후 3:00', title: '자유 난동', sub: FLOOR_INFO[fl].name }, () => {
       G.preset = fl === 'lobby' ? 'noon' : 'day';
       const S = getFloor(fl);
-      enterFloor(fl, { at: fl === 'office' ? S.F.anchors.rushSpawn : S.F.anchors.spawn, yaw: fl === 'office' ? -PI / 2 : -PI / 2 });
+      const A = S.F.anchors;
+      enterFloor(fl, { at: A.rushSpawn || A.spawn, yaw: A.rushSpawn ? -PI / 2 : (A.spawnYaw || 0) });
       resetPlayer(); snapCamera();
       startRampage();
     });
@@ -1620,7 +1869,7 @@ function toTitle() {
   G.mode = 'title'; G.scene = 'title'; G.paused = false; G.rampage = false; G.canDamage = false; G.busy = false;
   ui.pause(false); ui.bill(null); ui.hud(false); ui.prompt(null); ui.elevator(null); ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
   objective(null); G.evPanel = null;
-  if (!G.floors.office || G.floors.office.used || G.floors.lobby) disposeFloors();
+  if (!G.floors.office || G.floors.office.used || Object.keys(G.floors).length > 1) disposeFloors();
   fx.clear();
   G.preset = 'title';
   const S = enterFloor('office');
@@ -1659,8 +1908,14 @@ function botUpdate(dt) {
     return;
   }
   let goal = null, wantInteract = false, near = 0.35;
-  if (G.rampage) {
-    if (G.special >= 1) B.special = true;
+  B.spray = false;
+  if (G.rampage && !B.forceDest && B.toys !== false) {
+    const r = botToys(B, dt);
+    if (r) { if (r.goal) { goal = r.goal; near = r.near || 0.3; } wantInteract = !!r.interact; if (!r.goal && !r.interact) { B.interact = false; return; } }
+  }
+  if (G.rampage && !goal && !wantInteract) {
+    if (G.special >= 1 && !toys.riding()) B.special = true;
+    if (toys.riding() && B.forceDest) toys.dismount();
     if (B.forceDest && B.forceDest !== G.floorKind) {
       const ev = nearestElevator(P.pos); goal = ev.cabin.clone(); B.dest = B.forceDest; near = 0.2;
     } else {
@@ -1670,7 +1925,7 @@ function botUpdate(dt) {
       if (!tr || tr.removed || tr.destroyed || tr.held || G.rtime - B.targetT > 4) {
         tr = null; let bd = 1e9;
         for (const r of G.S.phys.records) {
-          if (r.removed || r.destroyed || r.held || r.price <= 0 || (B.skip.get(r) || 0) > G.rtime) continue;
+          if (r.removed || r.destroyed || r.held || r.riding || r.out || r.price <= 0 || (B.skip.get(r) || 0) > G.rtime) continue;
           const p = r.body.position; if (p.y > 1.8) continue;
           const d = Math.hypot(p.x - P.pos.x, p.z - P.pos.z) + (r.mass < 1 ? 1.5 : 0);
           if (d < bd) { bd = d; tr = r; }
@@ -1684,7 +1939,7 @@ function botUpdate(dt) {
         goal = V(p.x, 0, p.z); near = 0.9 + Math.max(tr.hx, tr.hz) * 0.6;
         if (d < 1.4 + Math.max(tr.hx, tr.hz) * 0.7) {
           aimAt(p);
-          if (G.focus && G.focus.rec === tr && DESKS.has(tr.type)) wantInteract = true;
+          if (G.focus && G.focus.rec === tr && flippable(tr) && !tr.flipped) wantInteract = true;
           else if (P.held) B.attack = true;
           else { B.flip = !B.flip; if (B.flip) B.attack = true; else B.kick = true; }
           goal = null;
@@ -1726,6 +1981,131 @@ function botUpdate(dt) {
     B.stuckT = 0; B.lastPos.copy(P.pos);
   }
 }
+
+// the bot plays with toys now and then: rides a chair / cart and rams things, drives the forklift under a car
+// and lifts it, presses the fire alarm, sprays an extinguisher. Returns null to fall back to smashing.
+function botToys(B, dt) {
+  const S = G.S;
+  if (toys.riding()) {
+    const R = toys.T.ride;
+    B.rideT = (B.rideT || 0) - dt;
+    if (R.kind === 'forklift') {
+      // find a car, line up in front of it, raise the fork, lower it, get off
+      let car = B.liftCar && !B.liftCar.removed ? B.liftCar : null;
+      if (!car) { let bd = 1e9; for (const r of S.phys.records) { if (r.type !== 'car' || r.removed || r.riding) continue; const d = Math.hypot(r.body.position.x - P.pos.x, r.body.position.z - P.pos.z); if (d < bd) { bd = d; car = r; } } B.liftCar = car; }
+      if (!car || B.rideT < -14) { toys.dismount(); B.toyCool = G.rtime + 20; return null; }
+      if (R.carried) {
+        B.liftHold = (B.liftHold || 0) + dt;
+        if (B.liftHold > 2.2 && R.forkWant > 0.5) { toys.attack('punch'); }
+        if (R.fork < 0.05 && R.forkWant === 0) { toys.dismount(); B.toyCool = G.rtime + 25; B.liftHold = 0; B.liftCar = null; return null; }
+        return {};
+      }
+      const cp = car.body.position, q = car.body.quaternion;
+      const cyaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
+      // approach from the car's side (forks under the long side)
+      const side = V(Math.cos(cyaw), 0, -Math.sin(cyaw));
+      const s = (P.pos.x - cp.x) * side.x + (P.pos.z - cp.z) * side.z >= 0 ? 1 : -1;
+      const front = V(cp.x + side.x * s * 2.35, 0, cp.z + side.z * s * 2.35);
+      const d = Math.hypot(front.x - P.pos.x, front.z - P.pos.z);
+      if (d < 0.45) {
+        const want = Math.atan2(cp.x - P.pos.x, cp.z - P.pos.z);
+        const dy = wrapA(want - R.yaw);
+        if (Math.abs(dy) > 0.12) { B.move.set(Math.sin(want) * 0.5, 0, Math.cos(want) * 0.5); return {}; }
+        if (R.forkWant < 0.5) toys.attack('punch');
+        return {};
+      }
+      return { goal: front, near: 0.4 };
+    }
+    // chair / cart: charge at the nearest breakable thing for a few seconds
+    if (B.rideT <= 0) { toys.dismount(); B.toyCool = G.rtime + 14; return null; }
+    let tr = null, bd = 1e9;
+    for (const r of S.phys.records) {
+      if (r.removed || r.destroyed || r.held || r.riding || r.price <= 0 || r === R.rec) continue;
+      const p = r.body.position, d = Math.hypot(p.x - P.pos.x, p.z - P.pos.z);
+      if (d < 1.0 || p.y > 1.6) continue;
+      if (d < bd) { bd = d; tr = r; }
+    }
+    return tr ? { goal: V(tr.body.position.x, 0, tr.body.position.z), near: 0.1 } : {};
+  }
+  // extinguisher in hand: spray for a bit, then throw it
+  if (P.held && WEAPON[P.held.type] === 'spray') {
+    B.sprayT = (B.sprayT || 0) + dt;
+    if (B.sprayT < 2.4 && toys.T.spray < 6.5) { B.spray = true; return {}; }
+    B.sprayT = 0; throwHeld(); B.toyCool = G.rtime + 10; return null;
+  }
+  if (G.rtime < (B.toyCool || 6) || P.held) return null;
+  // pick a toy: unalarmed fire bell, something to ride, an extinguisher
+  if (!B.toy || B.toy.removed || B.toy.riding || G.rtime - B.toyT > 9) {
+    B.toy = null; let bd = 14;
+    for (const r of S.phys.records) {
+      if (r.removed || r.held || r.riding || r.destroyed) continue;
+      const ok = (RIDE[r.type] && recUpright(r) > 0.85) || (r.type === 'alarmBell' && !(S.toy && S.toy.alarmed)) || r.type === 'extinguisher';
+      if (!ok || (B.skip.get(r) || 0) > G.rtime) continue;
+      const d = Math.hypot(r.body.position.x - P.pos.x, r.body.position.z - P.pos.z) + (r.type === 'chair' ? 2 : 0);
+      if (d < bd) { bd = d; B.toy = r; }
+    }
+    B.toyT = G.rtime;
+    if (!B.toy) { B.toyCool = G.rtime + 8; return null; }
+  }
+  const r = B.toy, p = r.body.position;
+  if (G.focus && G.focus.rec === r) {
+    aimAt(p);
+    if (RIDE[r.type]) B.rideT = r.type === 'forklift' ? 0 : 5;
+    B.toyPress = (B.toyPress || 0) + dt;
+    if (B.toyPress > 1.0) { B.skip.set(r, G.rtime + 30); B.toy = null; B.toyPress = 0; B.toyCool = G.rtime + 2; }
+    return { interact: true };
+  }
+  B.toyPress = 0;
+  const d = Math.hypot(p.x - P.pos.x, p.z - P.pos.z);
+  if (d < 1.3) { aimAt(p); }
+  if (G.rtime - B.toyT > 8) { B.skip.set(r, G.rtime + 20); B.toy = null; B.toyCool = G.rtime + 4; return null; }
+  return { goal: V(p.x, 0, p.z), near: 0.9 };
+}
+
+// ================================================================ toys + the API floor modules see (hooks / scene `call`)
+toys = createToys({
+  G, P, fx, sfx, after, ui, TOUCH, report, vibrate,
+  hitRec, destroyRec, addMoney, addItem, emit, alarmAt, npcCtx, syncRec, pickTarget,
+  upright: recUpright,
+  knockNpc: (n, dir, power) => n.knock(npcCtx(), dir, power),
+  collide(pos, r) {
+    const S = G.S;
+    let hit = collideCircle(pos, r, S.lists, 0);
+    for (const n of S.npcs) {
+      if (n.gone || n.state === 'air' || n.state === 'down') continue;
+      const dx = pos.x - n.pos.x, dz = pos.z - n.pos.z, d = Math.hypot(dx, dz), m = r + n.r;
+      if (d < m && d > 1e-4) { pos.x += dx / d * (m - d); pos.z += dz / d * (m - d); }
+    }
+    hit = collideCircle(pos, r, [S.F.rects], 0) || hit;
+    return hit;
+  },
+  unseat: () => unseat(),
+  destroyHeld() { const r = P.held; if (!r) return; P.held = null; if (r.group.parent) r.group.parent.remove(r.group); r.removed = true; r.destroyed = true; addItem(r.name, r.price); addMoney(Math.max(0, r.price - r.paid), null, true); emit('break', r); },
+});
+const GAME = {
+  get G() { return G; }, get P() { return P; }, get S() { return G.S; }, get F() { return G.S && G.S.F; },
+  get rampage() { return G.rampage; }, get mode() { return G.mode; }, get floor() { return G.floorKind; }, get time() { return G.rtime; },
+  fx, sfx, ui, after,
+  npc: (who) => findNpc(who),
+  npcs: (role) => (G.S ? G.S.npcs.filter((n) => !role || n.role === role) : []),
+  rec: (tag) => recByTag(tag),
+  recs: (pred) => (G.S ? G.S.phys.records.filter((r) => !r.removed && (!pred || pred(r))) : []),
+  anchor: (name) => (G.S ? anchorPos(G.S, name) : null),
+  say(n, text, sec = 2.6) { n = findNpc(n); if (n) n.say(text, sec, G.rtime); },
+  subtitle: (speaker, text, ms) => ui.subtitle(speaker, text, ms),
+  toast: (text, ms) => ui.toast(text, ms),
+  walkNpc(n, to, o = {}) {
+    n = findNpc(n); const p = anchorPos(G.S, to) || to; if (!n || !p) return;
+    n.walkTo(npcCtx(), p.x, p.z, { speed: o.speed || 1.3, anim: o.anim || 'walk', onArrive: () => { n.char.setAnim(o.arrive || 'idle'); if (o.onArrive) o.onArrive(n); } });
+  },
+  money(amount, pos = null, label = null) { addMoney(amount, pos); if (label) addItem(label, amount); },
+  emit: (kind, rec, n, value) => emit(kind, rec, n, value),
+  stress: (d) => addStress(d),
+  alarm: (pos, rad) => alarmAt(pos, rad),
+  hitRec: (rec, dmg, dir, power, opts) => hitRec(rec, dmg, dir || V(), power || 0, opts || {}),
+  setState: (rec, s) => toys.setState(rec, s),
+  triggerAlarm: (rec) => toys.triggerAlarm(rec || null),
+};
 
 // ================================================================ handlers + boot
 ui.init({
@@ -1771,8 +2151,36 @@ if (DEBUG) {
         items: [...G.items.values()].length, counts: G.counts, combo: G.combo, special: +G.special.toFixed(2),
         fps: G.fps, quality: gfx.level, post: gfx.usingPost, render: info(), errors: G.errors.length, rtime: +G.rtime.toFixed(2), bill: G.lastBill || null,
         floorsBuilt: Object.fromEntries(Object.entries(G.floors).map(([k, s]) => [k, s.buildMs])),
+        toys: toys.state(), fcounts: G.fcounts[G.floorKind] || {},
+        challenges: G.taskPool ? G.taskPool.map((t) => ({ id: t.id, text: t.text, key: t.key, need: t.need, p: chalProgress(t), done: t.done })) : [],
       };
     },
+    // ---- floors / toys helpers (debug + tests)
+    floors() { return FLOOR_LIST.map((f) => Object.assign({}, f, { built: !!G.floors[f.id], wrecked: G.floors[f.id] ? G.floors[f.id].phys.records.filter((r) => r.destroyed || r.removed).length : 0 })); },
+    chal(floor) { const C = G.chal[floor || G.floorKind]; return C ? C.pool.map((t) => ({ id: t.id, text: t.text, key: t.key, need: t.need, done: t.done, shown: C.shown.includes(t) })) : null; },
+    rec(tag) { const r = recByTag(tag); return r ? { id: r.id, type: r.type, x: +r.body.position.x.toFixed(2), y: +r.body.position.y.toFixed(2), z: +r.body.position.z.toFixed(2), hp: r.hp, hpMax: r.hpMax, stage: r.stage, destroyed: r.destroyed, fixed: r.fixed } : null; },
+    recs(type) { return G.S.phys.records.filter((r) => r.type === type && !r.removed).map((r) => ({ id: r.id, tag: r.tag, x: +r.body.position.x.toFixed(2), z: +r.body.position.z.toFixed(2), hp: r.hp, destroyed: r.destroyed, stage: r.stage })); },
+    // stand `dist` metres from a record (by id, tag or first of a type), facing it; side picks the approach direction
+    near(q, dist = 1.0, side = null) {
+      const r = typeof q === 'number' ? G.S.phys.records[q] : recByTag(q) || G.S.phys.records.find((x) => x.type === q && !x.removed && !x.destroyed);
+      if (!r) return null;
+      const p = r.body.position;
+      let dx, dz;
+      if (side) { dx = side[0]; dz = side[1]; } else { dx = P.pos.x - p.x; dz = P.pos.z - p.z; }
+      const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+      P.pos.set(p.x + dx * dist, 0, p.z + dz * dist); P.vel.set(0, 0, 0); P.y = 0;
+      P.yaw = Math.atan2(-dx, -dz); placePlayer(); snapCamera(); CAM.yaw = P.yaw; updateCamera(0, true);
+      return { id: r.id, type: r.type, x: +P.pos.x.toFixed(2), z: +P.pos.z.toFixed(2) };
+    },
+    // spawn any prop straight into the player's hands (weapons test: give('tambourine'))
+    give(type, opts = {}) {
+      const S = G.S, p = makeAny(type, opts);
+      S.F.group.add(p.group);
+      const rec = S.phys.addProp(p, P.pos.x, 1.0, P.pos.z, P.yaw, opts.tag || null, { prop: p, type });
+      pickUp(rec); return rec.id;
+    },
+    toys,
+    emit,
     start(mode, opts) { G.fast = true; return start(mode, opts || {}); },
     goto(id) {
       G.fast = true;

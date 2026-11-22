@@ -42,7 +42,10 @@
 <div id="results"></div>
 
 <script type="module">
-import { audio, audioLab } from '../js/audio.js';
+// ?mod=http://localhost:PORT/x.js renders another build of the module (only localhost, for before/after comparisons)
+const modParam = new URLSearchParams(location.search).get('mod');
+const modUrl = modParam && /^http:\/\/(localhost|127\.0\.0\.1):\d+\//.test(modParam) ? modParam : '../js/audio.js';
+const { audio, audioLab, createEngine } = await import(modUrl);
 
 const $ = (id) => document.getElementById(id);
 const status = (s) => { $('status').textContent = s; };
@@ -100,19 +103,185 @@ function flags(r, { silent = 0.01 } = {}) {
   return out.join(' ');
 }
 
+/* ---------- spectral / envelope metrics (independent of audio.js internals) ---------- */
+function fftEnergy(x) {
+  // in-place radix-2 FFT of a real signal; returns |X_k|^2 for k = 0..N/2
+  let N = 1; while (N < x.length) N <<= 1;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  re.set(x);
+  for (let i = 1, j = 0; i < N; i++) {
+    let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit;
+    if (i < j) { const t = re[i]; re[i] = re[j]; re[j] = t; }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang), h = len >> 1;
+    for (let i = 0; i < N; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < h; k++) {
+        const a = i + k, b = a + h;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+      }
+    }
+  }
+  const P = new Float64Array(N / 2 + 1);
+  for (let k = 0; k <= N / 2; k++) P[k] = (re[k] * re[k] + im[k] * im[k]) * (k === 0 || k === N / 2 ? 1 : 2) / N;
+  return { P, N };
+}
+const dB10 = (e) => (e > 1e-12 ? 10 * Math.log10(e) : -120);
+function metrics(buf) {
+  const sr = buf.sampleRate, L = buf.length, chs = buf.numberOfChannels;
+  const mono = new Float32Array(L);
+  let peak = 0, nan = false, sum = 0;
+  for (let ch = 0; ch < chs; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < L; i++) {
+      const x = d[i];
+      if (Number.isNaN(x)) { nan = true; continue; }
+      const a = Math.abs(x); if (a > peak) peak = a;
+      sum += x * x; mono[i] += x / chs;
+    }
+  }
+  let first = -1, last = 0;
+  for (let i = 0; i < L; i++) { const a = Math.abs(mono[i]); if (a > 0.001) { if (first < 0) first = i; last = i; } }
+  if (first < 0) first = 0;
+  let act = 0; for (let i = first; i <= last; i++) act += mono[i] * mono[i];
+  const rmsAct = Math.sqrt(act / Math.max(1, last - first + 1));
+  const eEnd = Math.min(L, first + Math.round(0.15 * sr));
+  let early = 0; for (let i = first; i < eEnd; i++) early += mono[i] * mono[i];
+  const earlyDb = dB10(early / Math.max(1, eEnd - first)), energyDb = dB10(act);
+  // envelope in 0.25 ms blocks -> 10%..90% rise of the main transient, and onset->peak
+  const B = Math.max(1, Math.round(sr * 0.00025)), nb = Math.ceil(L / B), env = new Float32Array(nb);
+  for (let i = 0; i < L; i++) { const a = Math.abs(mono[i]); const k = (i / B) | 0; if (a > env[k]) env[k] = a; }
+  let pk = 0; for (let k = 1; k < nb; k++) if (env[k] > env[pk]) pk = k;
+  let lo = pk; while (lo > 0 && env[lo] >= 0.1 * env[pk]) lo--;
+  let hi = lo; while (hi < pk && env[hi] < 0.9 * env[pk]) hi++;
+  const rise = (hi - lo) * B / sr, onsetToPeak = (pk * B - first) / sr;
+  // beat punch: 95th-percentile vs median of 10 ms block RMS (how hard the hits stand out of the bed)
+  const BB = Math.round(sr * 0.01), blocks = [];
+  for (let i = first; i + BB <= last; i += BB) { let s2 = 0; for (let j = i; j < i + BB; j++) s2 += mono[j] * mono[j]; blocks.push(s2 / BB); }
+  blocks.sort((a, b) => a - b);
+  const punchDb = blocks.length > 10 ? dB10(blocks[Math.floor(blocks.length * 0.95)] / Math.max(1e-12, blocks[Math.floor(blocks.length / 2)])) : 0;
+  const { P, N } = fftEnergy(mono);
+  const df = sr / N;
+  let e0 = 0, e1 = 0, e2 = 0, e3 = 0, cen = 0, tot = 0;
+  for (let k = 1; k < P.length; k++) {
+    const fq = k * df, e = P[k];
+    if (fq < 100) e0 += e; else if (fq < 1000) e1 += e; else if (fq < 6000) e2 += e; else e3 += e;
+    cen += fq * e; tot += e;
+  }
+  return {
+    peak, rms: Math.sqrt(sum / (L * chs)), rmsAct, dur: last / sr, nan, earlyDb, energyDb, punchDb,
+    crest: rmsAct > 0 ? 20 * Math.log10(env[pk] / rmsAct) : 0,
+    rise, onsetToPeak, sub: dB10(e0), low: dB10(e1), mid: dB10(e2), air: dB10(e3), centroid: tot > 0 ? cen / tot : 0,
+  };
+}
+function rmsWin(buf, t0, t1) {
+  const sr = buf.sampleRate, a = Math.floor(t0 * sr), b = Math.min(buf.length, Math.floor(t1 * sr));
+  let s = 0, n = 0;
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch); for (let i = a; i < b; i++) { s += d[i] * d[i]; n++; } }
+  return Math.sqrt(s / Math.max(1, n));
+}
+function peakWin(buf, t0, t1) {
+  const sr = buf.sampleRate, a = Math.floor(t0 * sr), b = Math.min(buf.length, Math.floor(t1 * sr));
+  let p = 0;
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch); for (let i = a; i < b; i++) p = Math.max(p, Math.abs(d[i])); }
+  return p;
+}
+// one sfx through the full master chain (what the player hears). Played at 1.0 s: Chrome's DynamicsCompressor
+// squashes anything in the first few hundred ms after a context starts, which a running game never hits.
+async function renderMaster(name, o = {}, seconds = 4) {
+  const sr = 44100, c = new OfflineAudioContext(2, sr * seconds, sr);
+  const e = createEngine(c, {});
+  e.sfxAt(name, o, 1.0);
+  return c.startRendering();
+}
+// rage music + rapid punching. sfxMute: hear only the (ducked) music
+async function renderDuckScene({ punches = true, sfxMute = false, music = true } = {}) {
+  const sr = 44100, c = new OfflineAudioContext(2, sr * 4, sr);
+  const e = createEngine(c, {});
+  if (music) { e.setIntensity(1); e.musicFilter.frequency.value = 18000; e.music('rage', 0); e.pump(4); }
+  if (sfxMute) e.sfxBus.gain.value = 0;
+  const times = [];
+  if (punches) for (let i = 0; i < 12; i++) {
+    const t = 1.0 + i * 0.22; times.push(t);
+    e.sfxAt('punch', { vol: 0.65 }, t);
+    e.sfxAt(['hitWood', 'hitMetal', 'hitPlastic'][i % 3], { vol: 0.8 }, t);
+  }
+  return { buf: await c.startRendering(), times };
+}
+
+const REPORT = { sfx: {}, master: {}, music: {}, extra: {} };
+window.__report = REPORT;
+
 async function renderCheck() {
   status('렌더링 중…');
   const res = $('results');
   let html = '<p>' + preInit.join('<br>') + '</p>';
   let problems = 0;
 
-  html += '<h3>효과음 (빌더 원음, 압축기 전)</h3><table id="sfxTable"><tr><th>name</th><th>peak</th><th>peak dB</th><th>RMS</th><th>dur s</th><th>flags</th></tr>';
+  html += '<h3>효과음 (빌더 원음, 압축기 전) — 대역 에너지 dB = 10·log10(Σx²)</h3><table id="sfxTable"><tr><th>name</th><th>peak</th><th>peak dB</th><th>RMS</th><th>dur s</th><th>crest dB</th><th>rise ms</th><th>onset→peak ms</th><th>&lt;100</th><th>100–1k</th><th>1k–6k</th><th>&gt;6k</th><th>centroid Hz</th><th>flags</th></tr>';
   for (const name of audioLab.sfxNames) {
-    const r = audioLab.analyse(await audioLab.renderSfx(name));
+    const r = metrics(await audioLab.renderSfx(name));
+    REPORT.sfx[name] = r;
     const fl = flags(r); if (fl) problems++;
-    html += row([name, f(r.peak), db(r.peak), f(r.rms, 4), f(r.dur, 2), fl], !!fl);
+    html += row([name, f(r.peak), db(r.peak), f(r.rms, 4), f(r.dur, 2), f(r.crest, 1), f(r.rise * 1000, 1), f(r.onsetToPeak * 1000, 1),
+      f(r.sub, 1), f(r.low, 1), f(r.mid, 1), f(r.air, 1), f(r.centroid, 0), fl], !!fl);
   }
   html += '</table>';
+
+  html += '<h3>효과음 — 마스터 체인 통과 (게임에서 들리는 그대로)</h3><table><tr><th>name</th><th>peak</th><th>RMS</th><th>rise ms</th><th>flags</th></tr>';
+  for (const name of audioLab.sfxNames) {
+    const r = metrics(await renderMaster(name));
+    REPORT.master[name] = r;
+    const fl = flags(r); if (fl) problems++;
+    html += row([name, f(r.peak), f(r.rms, 4), f(r.rise * 1000, 1), fl], !!fl);
+  }
+  html += '</table>';
+
+  // timbre variants (rapid repeats rotate through these)
+  if (audioLab.renderSfx.length >= 1) {
+    html += '<h3>연타 변주 (variant 0/1/2)</h3><table><tr><th>name</th><th>variant</th><th>centroid Hz</th><th>&lt;100</th><th>&gt;6k</th></tr>';
+    REPORT.extra.variants = {};
+    for (const name of ['punch', 'kick', 'hitWood', 'hitMetal']) for (const v of [0, 1, 2]) {
+      const r = metrics(await audioLab.renderSfx(name, { variant: v }));
+      REPORT.extra.variants[name + '#' + v] = { centroid: r.centroid, sub: r.sub, air: r.air };
+      html += row([name, v, f(r.centroid, 0), f(r.sub, 1), f(r.air, 1)]);
+    }
+    html += '</table>';
+  }
+
+  // 40 breaks in one frame, no music, straight through the master chain
+  {
+    const sr = 44100, c = new OfflineAudioContext(2, sr * 3, sr), e = createEngine(c, {});
+    const n = ['breakGlass', 'breakWood', 'breakMetal', 'breakCeramic', 'breakPlastic', 'crash', 'hitMetal', 'punch', 'kick', 'coin'];
+    let acc = 0; for (let i = 0; i < 40; i++) if (e.sfxAt(n[i % n.length], { vol: 2, pan: Math.random() * 2 - 1 }, 1.0)) acc++;
+    const r = metrics(await c.startRendering());
+    r.accepted = acc;
+    REPORT.extra.burst40 = { ...r, accepted: acc };
+    const fl = flags(r); if (fl) problems++;
+    html += '<h3>한 프레임 40개 (vol 2, 배경음 없음)</h3><table><tr><th>accepted</th><th>peak</th><th>RMS</th><th>flags</th></tr>' + row([acc, f(r.peak), f(r.rms, 4), fl], !!fl) + '</table>';
+  }
+
+  // sidechain duck: music RMS right after each punch, with vs without the punches (sfx bus muted so only music is measured)
+  {
+    const ref = await renderDuckScene({ punches: false, sfxMute: true });
+    const duck = await renderDuckScene({ punches: true, sfxMute: true });
+    const dry = await renderDuckScene({ punches: true, music: false });
+    const wet = await renderDuckScene({ punches: true, music: true });
+    let dsum = 0, pd = [], pw = [];
+    for (const t of duck.times) {
+      dsum += 20 * Math.log10(rmsWin(duck.buf, t + 0.01, t + 0.12) / Math.max(1e-9, rmsWin(ref.buf, t + 0.01, t + 0.12)));
+      pd.push(peakWin(dry.buf, t, t + 0.03)); pw.push(peakWin(wet.buf, t, t + 0.03));
+    }
+    const avg = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+    const recov = 20 * Math.log10(rmsWin(duck.buf, 3.75, 3.95) / Math.max(1e-9, rmsWin(ref.buf, 3.75, 3.95)));
+    REPORT.extra.duck = { musicDipDb: dsum / duck.times.length, recoveryDb: recov, sfxPeakAlone: avg(pd), sfxPeakOverMusic: avg(pw), wetPeak: metrics(wet.buf).peak, musicOnlyRms: metrics(ref.buf).rms };
+    const D = REPORT.extra.duck;
+    html += '<h3>배경음 덕킹 (rage + 0.22 s 간격 펀치 12회)</h3><table><tr><th>music dip dB (0–120 ms)</th><th>recovery dB (끝)</th><th>sfx peak 단독</th><th>sfx peak + 음악</th><th>전체 peak</th></tr>' +
+      row([f(D.musicDipDb, 2), f(D.recoveryDb, 2), f(D.sfxPeakAlone), f(D.sfxPeakOverMusic), f(D.wetPeak)], D.wetPeak > 1) + '</table>';
+  }
 
   html += '<h3>coin 콤보 음높이</h3><table><tr><th>pitch</th><th>peak</th><th>RMS</th><th>flags</th></tr>';
   for (const p of [0.5, 1, 1.25, 1.5, 2, 3, 4]) {
@@ -126,6 +295,8 @@ async function renderCheck() {
   for (const name of audioLab.trackNames) {
     for (const inten of [0, 1]) {
       const r = audioLab.analyse(await audioLab.renderMusic(name, { seconds: 8, intensity: inten }));
+      REPORT.music[name + '@' + inten] = r;
+      if (name === 'rage' && inten === 1) REPORT.extra.rageBands = metrics(await audioLab.renderMusic(name, { seconds: 8, intensity: 1 }));
       const fl = flags(r, { silent: 0.05 }); if (fl) problems++;
       html += row([name, inten, f(r.peak), db(r.peak), f(r.rms, 4), db(r.rms), fl], !!fl);
     }
@@ -135,17 +306,21 @@ async function renderCheck() {
   html += '<h3>배경음 게임 내 레벨 (전체 마스터 체인, -15 dB 버스)</h3><table><tr><th>track</th><th>peak</th><th>RMS</th><th>RMS dB</th></tr>';
   for (const name of audioLab.trackNames) {
     const r = audioLab.analyse(await audioLab.renderMusic(name, { seconds: 8, raw: false }));
+    REPORT.music[name + '@game'] = r;
     html += row([name, f(r.peak), f(r.rms, 4), db(r.rms)], r.nan || r.peak > 1);
   }
   html += '</table>';
 
-  html += '<h3>폭주 테스트 (마스터 체인 통과: 0.2 s에 40회 동시 + 0.25~0.73 s에 80회, vol 1.5, rage 배경음)</h3>';
+  html += '<h3>폭주 테스트 (마스터 체인 통과: 1.0 s에 40회 동시 + 1.05~1.53 s에 80회, vol 1.5, rage 배경음)</h3>';
   const st = await audioLab.renderStress();
   const rs = audioLab.analyse(st.buf);
   const sfl = flags(rs); if (sfl) problems++;
+  REPORT.extra.stress = { ...rs, accepted: st.accepted, maxVoices: st.maxVoices };
   html += '<table><tr><th>calls</th><th>accepted</th><th>max voices</th><th>peak</th><th>RMS</th><th>flags</th></tr>' +
     row([st.calls, st.accepted, st.maxVoices, f(rs.peak), f(rs.rms, 4), sfl], !!sfl) + '</table>';
 
+  REPORT.problems = problems;
+  html += '<pre id="json" style="display:none">' + JSON.stringify(REPORT) + '</pre>';
   html += '<p id="done">DONE problems=' + problems + '</p>';
   res.innerHTML = html;
   status('렌더 검사 완료 — 문제 ' + problems + '개');

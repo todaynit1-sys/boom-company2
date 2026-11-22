@@ -16,7 +16,8 @@ export class NPC {
     this.spec = spec;
     this.id = spec.id || 'npc' + SEQ++;
     this.role = spec.role || 'worker';
-    this.char = makeCharacter({ preset: spec.preset, seed: spec.variantSeed != null ? spec.variantSeed : (spec.id ? hash(spec.id) : SEQ) });
+    // spec.look: optional colour overrides for the preset (e.g. a guard uniform: { suit, pants, shirt, tie })
+    this.char = makeCharacter(Object.assign({}, spec.look || {}, { preset: spec.preset, seed: spec.variantSeed != null ? spec.variantSeed : (spec.id ? hash(spec.id) : SEQ) }));
     this.pos = new THREE.Vector3(spec.x, 0, spec.z);
     this.y = 0;
     this.yaw = spec.rotY || 0;

@@ -116,6 +116,32 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   s = await walkTo(bp.x, bp.z, { near: 1.2, cond: (s) => s.focus === '커피 드리기', tag: 'boss' });
   s = await holdE();
   expect(s.phase === 'delivered', 'hold E delivers the coffee');
+  // ---- situations contributed by floor modules (e.g. B2 「사장님 차 빼 주기」): follow the marker with real keys
+  s = await waitScene((s) => s.scene !== 'coffee' && !s.busy, 40000);
+  const played = new Set();
+  for (let guard = 0; guard < 60 && s.scene !== 'sunset'; guard++) {
+    played.add(s.scene);
+    const o = s.objective;
+    if (s.busy || !o) { s = await step(15, 15); continue; }
+    if (o.kind === 'elevator') {
+      s = await walkTo(o.x, o.z, { near: 0.2, cond: () => ev('!document.getElementById("elevator").hidden'), tag: 'fs-elev' });
+      s = await step(6);
+      if (await ev('!document.getElementById("elevator").hidden')) {
+        await I.clickSel(`#ev-list .ev-btn[data-id="${o.dest}"]`);
+        s = await waitScene((st) => st.floor === o.dest && !st.busy, 30000);
+      }
+      continue;
+    }
+    if (o.kind === 'interact') {
+      s = await walkTo(o.x, o.z, { near: 0.45, cond: (st) => !!st.focus, tag: 'fs-hold' });
+      if (s.focus) s = await holdE(); else s = await step(10);
+      continue;
+    }
+    s = await walkTo(o.x, o.z, { near: 0.5, cond: (st) => !st.objective || st.objective.x !== o.x || st.objective.z !== o.z, tag: 'fs-walk' });
+  }
+  played.delete('sunset');
+  log('floor scenes played', [...played].join(','));
+  expect(played.size >= 1, 'a floor-module scene was played between the coffee run and 퇴근 5분 전 (' + [...played].join(',') + ')');
   s = await waitScene((s) => s.scene === 'sunset' && s.phase === 'leave' && !s.busy, 40000);
   await shot('is-6-sunset');
   // ---- sunset: head for the elevator, get intercepted

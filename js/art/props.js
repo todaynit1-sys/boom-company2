@@ -887,6 +887,7 @@ function colorsOf(obj) {
   return arr.length ? arr.slice(0, 6) : [0xcccccc];
 }
 const STATIC = new Map();
+const PARTS = new Map();
 const _box = new THREE.Box3();
 
 export function makeProp(type, opts = {}) {
@@ -904,7 +905,11 @@ export function makeProp(type, opts = {}) {
   const inner = new THREE.Group();
   const info = build(inner, opts) || {};
   const colors = colorsOf(inner);
-  const parts = mergeStatic(inner);
+  let parts = mergeStatic(inner);
+  // same options → share the merged static geometry even for props with set()/moving parts (instancing)
+  const prevParts = PARTS.get(key);
+  if (prevParts && prevParts.length === parts.length && prevParts.every((p, i) => p.mat === parts[i].mat)) { for (const p of parts) p.geo.dispose(); parts = prevParts; }
+  else PARTS.set(key, parts);
   partsToMeshes(parts, inner);
   inner.updateMatrixWorld(true);
   _box.setFromObject(inner);
