@@ -519,12 +519,12 @@ export const ui = {
   },
 
   // size grows with the amount and the combo; colour steps at 10k / 50k / 200k (t1…t3)
-  moneyPop(x, y, amount, combo = 0) {
+  moneyPop(x, y, amount, combo = 0, label = null) {
     const p = pops[popIdx];
     popIdx = (popIdx + 1) % pops.length;
     if (p.a) p.a.cancel();
     const a = Math.round(Number(amount) || 0);
-    p.s.textContent = (a >= 0 ? '+' : '') + fmt(a) + '원';
+    p.s.textContent = (a >= 0 ? '+' : '') + (label ? label + ' ' : '') + fmt(a) + '원'; // "+치료비 20,000원"
     const tier = a >= 200000 ? 3 : a >= 50000 ? 2 : a >= 10000 ? 1 : 0;
     p.w.classList.toggle('huge', tier >= 2);
     p.w.dataset.tier = String(tier);
@@ -712,18 +712,26 @@ export const ui = {
     E['r-meta'].textContent = `${MODE_LABEL[data.mode] || '난동'} · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}` + (data.meta ? ` · ${data.meta}` : '');
     const tb = E['r-items'];
     tb.textContent = '';
-    const items = data.items || [];
-    if (!items.length) {
+    const items = data.items || [], people = data.people || [];
+    if (!items.length && !people.length) {
       const tr = document.createElement('tr'); tr.className = 'empty';
       const td = document.createElement('td'); td.colSpan = 3; td.textContent = '부순 물건이 없어요. 참 착한 직원이네요';
       tr.appendChild(td); tb.appendChild(tr);
     }
-    for (const it of items) {
+    const row = (it) => {
       const tr = document.createElement('tr');
       const n = document.createElement('td'); n.className = 'n'; n.textContent = it.name;
       const c = document.createElement('td'); c.className = 'c'; c.textContent = it.count > 1 ? `×${it.count}` : '';
       const a = document.createElement('td'); a.className = 'a'; a.textContent = fmt(it.amount) + '원';
       tr.append(n, c, a); tb.appendChild(tr);
+    };
+    for (const it of items) row(it);
+    // 기절시킨 사람들 (치료비 · 위자료) as their own section under the things
+    if (people.length) {
+      const tr = document.createElement('tr'); tr.className = 'sec';
+      const td = document.createElement('td'); td.colSpan = 3; td.textContent = '사람 (치료비 · 위자료)';
+      tr.appendChild(td); tb.appendChild(tr);
+      for (const it of people) row(it);
     }
     E['r-total'].textContent = fmt(data.total) + '원';
     const best = E['r-best'];

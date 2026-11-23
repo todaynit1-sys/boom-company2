@@ -692,6 +692,33 @@ const SFX = {
     return e;
   },
   engine: (c, o, t, p) => M(tone(c, o, t, { type: 'sawtooth', f: 55 * p, lp: 380, vib: [16, 6], a: 0.05, h: 0.35, d: 0.12, v: 0.16 }), noise(c, o, t, { lp: 300, a: 0.05, h: 0.35, d: 0.1, v: 0.12 })),
+  // ---- people (깨꼬닥)
+  // KO: a descending slide-whistle (x.at s, default 0.5 = when the body lands) → floppy thud → a little twinkle of stars
+  ko: (c, o, t, p, x) => {
+    const L = clamp(x && Number.isFinite(x.at) ? x.at : 0.5, 0.2, 1.5), T = t + L;
+    let e = M(
+      tone(c, o, t, { f: 1900 * p, fs: [[L * 0.92, 330 * p]], vib: [7, 28], a: 0.015, h: L - 0.05, d: 0.05, v: 0.2 }),
+      tone(c, o, t, { type: 'triangle', f: 950 * p, fs: [[L * 0.92, 165 * p]], vib: [7, 14], a: 0.015, h: L - 0.05, d: 0.05, v: 0.07 }),
+      noise(c, o, t, { bp: 1900 * p, q: 6, ffs: [[L * 0.92, 330 * p]], a: 0.02, h: L - 0.06, d: 0.05, v: 0.05 }),
+      weight(c, o, T, { f0: 120, f1: 42, g: 0.1, d: 0.18, v: 1.0, sub: 48, subD: 0.2, subV: 0.8 }),
+      noise(c, o, T, { lp: 520, a: 0.002, d: 0.12, v: 0.55 }),
+      noise(c, o, T, { bp: 900, q: 0.8, a: 0.001, d: 0.04, v: 0.3 }));
+    [2093, 2637, 3136, 3951, 4699].forEach((f, i) => { e = M(e, bell(c, o, T + 0.1 + i * 0.065, f * p, { d: 0.45, v: 0.07, ratios: [1, 2.4], amps: [1, 0.25] })); });
+    return e;
+  },
+  // a cartoon bonk on a limp body: wood-block tock + springy boing
+  bonk: (c, o, t, p) => M(
+    crack(c, o, t, { bp: 2200 * p, q: 1.2, v: 0.5, d: 0.003 }),
+    tone(c, o, t, { type: 'triangle', f: 560 * p, f1: 400 * p, g: 0.05, a: 0.001, d: 0.09, v: 0.45 }),
+    tone(c, o, t + 0.01, { f: 210 * p, fs: [[0.08, 330 * p], [0.22, 250 * p]], vib: [19, 38], a: 0.005, h: 0.05, d: 0.2, v: 0.16 })),
+  // the little soul puff rising (airy whoo) / sucked back in (fwip)
+  soul: (c, o, t, p) => M(
+    tone(c, o, t, { f: 480 * p, fs: [[0.45, 880 * p]], vib: [6, 22], a: 0.18, h: 0.25, d: 0.35, v: 0.12 }),
+    noise(c, o, t, { bp: 1300 * p, q: 3, ff1: 2200 * p, a: 0.18, h: 0.2, d: 0.3, v: 0.06 })),
+  soulBack: (c, o, t, p) => M(
+    tone(c, o, t, { f: 950 * p, f1: 330 * p, g: 0.17, a: 0.01, d: 0.2, v: 0.14 }),
+    noise(c, o, t, { bp: 1800 * p, q: 2, ff1: 600, a: 0.01, d: 0.18, v: 0.08 }),
+    thump(c, o, t + 0.17, 220 * p, 120, 0.05, 0.25)),
 };
 
 // per-sound trim, measured with the offline render check (raw builder peak kept under ~0.9)
