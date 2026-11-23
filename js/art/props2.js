@@ -217,6 +217,42 @@ export const tex2 = {
       return finishTex(c);
     });
   },
+  // street asphalt: warm dark grey, fine aggregate, a few patched squares and tyre-polished bands (1 texture ≈ 4 m)
+  asphalt() {
+    return cachedT('asphalt', () => {
+      const c = cvs(512, 512), x = c.getContext('2d'), r = rng(57);
+      x.fillStyle = '#5b5c60'; x.fillRect(0, 0, 512, 512);
+      blotches(x, 512, 512, 40, ['#636468', '#535458', '#5f5d5b'], 30, 90, r, 0.35);
+      speckle(x, 512, 512, 14000, ['#4b4c50', '#6c6d71', '#77787b', '#47484b'], 1, 2.2, r, 0.55);
+      x.fillStyle = 'rgba(40,40,44,0.18)'; x.fillRect(300, 60, 120, 90); x.fillRect(40, 330, 90, 120);
+      x.strokeStyle = 'rgba(35,35,38,0.35)'; x.lineWidth = 2; x.strokeRect(300, 60, 120, 90); x.strokeRect(40, 330, 90, 120);
+      x.fillStyle = 'rgba(255,255,255,0.035)'; x.fillRect(0, 140, 512, 60); x.fillRect(0, 380, 512, 50);
+      x.strokeStyle = 'rgba(30,30,32,0.4)'; x.lineWidth = 1.5;
+      x.beginPath(); x.moveTo(180, 0); x.lineTo(196, 80); x.lineTo(186, 150); x.stroke();
+      return finishTex(c);
+    });
+  },
+  // plaza paving: warm grey-beige rectangular stones in a running bond, a darker accent row (1 texture ≈ 2 m)
+  pavingStone() {
+    return cachedT('pavingStone', () => {
+      const c = cvs(512, 512), x = c.getContext('2d'), r = rng(58);
+      x.fillStyle = '#a39a8e'; x.fillRect(0, 0, 512, 512);
+      const cols = ['#d9cfc0', '#d2c7b7', '#ddd4c6', '#cbbfae', '#d6ccbd'];
+      const rh = 64, rw = 128;
+      for (let j = 0; j < 8; j++) {
+        const off = (j % 2) * rw / 2;
+        for (let i = -1; i < 5; i++) {
+          const X = i * rw + off, Y = j * rh;
+          x.fillStyle = j === 3 ? (i % 2 ? '#b3a796' : '#bdb19f') : cols[(r() * cols.length) | 0];
+          x.fillRect(X + 3, Y + 3, rw - 6, rh - 6);
+          x.fillStyle = 'rgba(255,255,255,0.10)'; x.fillRect(X + 3, Y + 3, rw - 6, 4);
+          x.fillStyle = 'rgba(80,70,60,0.10)'; x.fillRect(X + 3, Y + rh - 7, rw - 6, 4);
+        }
+      }
+      speckle(x, 512, 512, 7000, ['#bfb4a4', '#e6ddd0', '#a99e8f'], 1, 2, r, 0.35);
+      return finishTex(c);
+    });
+  },
   // wide rooftop panoramas (wrapS repeat, horizon ≈ 62 % down). Far hills + city rooftops below eye level.
   skyDay() { return skyPano('day'); },
   skyDusk() { return skyPano('dusk'); },
@@ -1615,8 +1651,8 @@ const carBurnt = () => texMat('carBurnt', 128, 128, (x, w, h) => {
   for (let i = 0; i < 40; i++) { x.fillStyle = r() < 0.7 ? 'rgba(14,12,11,0.6)' : 'rgba(120,64,32,0.4)'; x.beginPath(); x.arc(r() * w, r() * h, 3 + r() * 12, 0, 7); x.fill(); }
 }, {}, 0.95);
 D.car = (g, o) => {
-  const boss = !!o.boss;
-  const col = o.color || (boss ? '#2e323a' : '#4a86d0');
+  const boss = !!o.boss, taxi = !boss && !!o.taxi;
+  const col = o.color || (boss ? '#2e323a' : taxi ? '#f2a43c' : '#4a86d0');
   const L = boss ? 4.7 : 4.1, W = boss ? 1.86 : 1.76;
   const paint = M(col, boss ? 0.26 : 0.32, boss ? 0.15 : 0.08);
   const dark = M('#26282d', 0.7), trim = M('#3a3d44', 0.55), ch = chrome();
@@ -1667,6 +1703,13 @@ D.car = (g, o) => {
     add(cabin, polyG('ci' + kind + 'r' + sx, rear(0.004)), interior); pane('r' + sx, rear(0.01));
   }
   if (boss) { for (const sx of [-1, 1]) noShadow(add(cabin, boxG(0.012, 0.012, (zf(y0w) - zr(y0w))), ch, sx * (Wc / 2 + 0.012), y0w - 0.015, (zf(y0w) + zr(y0w)) / 2)); }
+  // taxi: roof lamp (rides on the cabin, so it squashes with the wreck stages)
+  if (taxi) {
+    const rz = (cl.ft + cl.rt) / 2 + 0.05;
+    RB(cabin, 0.56, 0.17, 0.24, 0.05, glow('#fff3c4', '#ffd36a', 0.55), 0, cl.h + 0.06, rz, 2);
+    const lampT = texMat('taxiLamp', 192, 56, (x, w, h) => { x.fillStyle = '#fff3c4'; x.fillRect(0, 0, w, h); x.fillStyle = '#d8352a'; fitText(x, '택시', w / 2, h / 2 + 1, 170, 42, '900'); }, { emissive: '#ffffff', emissiveIntensity: 0.35 }, 0.5);
+    for (const s of [1, -1]) noShadow(add(cabin, planeG(0.5, 0.13), lampT, 0, cl.h + 0.145, rz + s * 0.125, 0, s > 0 ? 0 : PI, 0));
+  }
   // mirrors
   for (const sx of [-1, 1]) { RB(body, 0.14, 0.09, 0.08, 0.03, paint, sx * (W / 2 + 0.03), 0.98, cl.fb - 0.05); }
   // front: grille, headlights, plate
@@ -1716,7 +1759,7 @@ D.car = (g, o) => {
   for (const ob of all) ob.userData.rest = { p: ob.position.clone(), r: ob.rotation.clone(), s: ob.scale.clone(), v: ob.visible };
   const dent = carPaintDamaged(col), burnt = carBurnt(), cracked = T.crackGlass();
   return {
-    name: boss ? '사장님 차' : '자동차', mass: boss ? 2000 : 1500, price: boss ? 150000000 : 60000000, material: 'metal',
+    name: boss ? '사장님 차' : taxi ? '택시' : '자동차', mass: boss ? 2000 : 1500, price: boss ? 150000000 : 60000000, material: 'metal',
     parts: { body, cabin, glass, wheels, hood, doors, bumpers: [bumpF, bumpR] },
     set(stage) {
       const st = Math.max(0, Math.min(4, Math.round(+stage || 0)));
@@ -1982,6 +2025,462 @@ D.sprinkler = (g) => {
     },
     set(s) { if (spray) spray.visible = !!s && s !== 'off'; },
   };
+};
+
+// ================================================================= 밖 · 회사 앞 거리 (street)
+const shelterGlass = () => M('#cfe8f2', 0.05, 0.05, { transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }, 'shelterGlass');
+// moving parts built loose in a plain group, merged per material into a dyn group (fewer draws, still swappable)
+function bake(loose, into, cast = false) { for (const p of mergeStatic(loose)) { const m = new THREE.Mesh(p.geo, p.mat); m.castShadow = cast && p.cast; m.receiveShadow = true; m.renderOrder = p.order; into.add(m); } return into; }
+// glass panes that crack on set('broken'): pass the panes' parent (a dyn group)
+function crackable(group) {
+  const list = [];
+  group.traverse((m) => { if (m.isMesh) list.push([m, m.material]); });
+  return (on) => { const cr = T.crackGlass(); for (const [m, orig] of list) m.material = on ? cr : orig; };
+}
+function wheelX(p, r, tube, x, y, z, tire, rim) {
+  add(p, torG(r, tube, 6, 16), tire, x, y, z, 0, PI / 2, 0);
+  C(p, r * 0.78, r * 0.78, tube * 1.6, rim, x, y - tube * 0.8, z, 12, 0, 0, PI / 2);
+}
+D.bus = (g, o) => {
+  const col = o.color || '#2f74d0', L = 10.4, W = 2.5, H = 3.0;
+  const paint = M(col, 0.35, 0.08), white = M('#f3f3ef', 0.4), dark = M('#26282d', 0.7), trim = M('#3a3d44', 0.55);
+  const tire = M('#232428', 0.85), rim = M('#d9dcdf', 0.35, 0.5);
+  RB(g, W, 1.1, L, 0.2, white, 0, 0.32, 0, 2);
+  RB(g, W, H - 1.32, L, 0.3, paint, 0, 1.32, 0, 2);
+  B(g, W - 0.4, 0.22, L - 2.2, dark, 0, 0.12, 0);
+  RB(g, W + 0.04, 0.12, L - 0.4, 0.05, paint, 0, 1.24, 0);
+  // wheel arches + wheels (front axle under the driver, rear axle behind the middle door)
+  for (const z of [L / 2 - 1.9, -L / 2 + 2.6]) for (const sx of [-1, 1]) {
+    add(g, torG(0.6, 0.06, 6, 16, PI), trim, sx * (W / 2 - 0.01), 0.45, z, 0, PI / 2, 0, 1, 1, 1.3);
+    wheelX(g, 0.36, 0.14, sx * (W / 2 - 0.22), 0.5, z, tire, rim);
+  }
+  // windows, windscreen, doors (cracked on 'broken')
+  const glassL = new THREE.Group();
+  const winT = texMat('busWin', 512, 64, (x, w, h) => {
+    const gr = x.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#5a7f9e'); gr.addColorStop(1, '#22364b');
+    x.fillStyle = gr; x.fillRect(0, 0, w, h);
+    const r = rng(31);
+    for (let i = 0; i < 7; i++) { if (r() < 0.45) { const px = 30 + i * 70 + r() * 20; x.fillStyle = 'rgba(25,30,40,0.55)'; x.beginPath(); x.ellipse(px, 40, 10, 12, 0, 0, 7); x.fill(); x.fillRect(px - 13, 46, 26, 20); } }
+    x.fillStyle = '#1b1d22'; for (let i = 0; i <= 7; i++) x.fillRect(i * 73, 0, 5, h);
+    x.fillStyle = 'rgba(255,255,255,0.18)'; for (let i = 0; i < 7; i++) { x.beginPath(); x.moveTo(i * 73 + 14, 0); x.lineTo(i * 73 + 30, 0); x.lineTo(i * 73 + 18, h); x.lineTo(i * 73 + 2, h); x.fill(); }
+  }, { side: THREE.DoubleSide }, 0.15);
+  for (const sx of [-1, 1]) add(glassL, planeG(L - 1.5, 0.92), winT, sx * (W / 2 + 0.006), 1.98, -0.25, 0, sx * PI / 2, 0);
+  add(glassL, planeG(W - 0.3, 1.45), T.carGlass(), 0, 1.75, L / 2 + 0.006);
+  add(glassL, planeG(W - 0.5, 0.8), T.carGlass(), 0, 2.05, -L / 2 - 0.006, 0, PI, 0);
+  const doorT = texMat('busDoor', 128, 256, (x, w, h) => { x.fillStyle = '#2a2d33'; x.fillRect(0, 0, w, h); x.fillStyle = '#3f6a8c'; x.fillRect(8, 8, w / 2 - 12, h - 16); x.fillRect(w / 2 + 4, 8, w / 2 - 12, h - 16); x.fillStyle = 'rgba(255,255,255,0.2)'; x.fillRect(14, 10, 10, h - 20); x.fillRect(w / 2 + 10, 10, 10, h - 20); }, { side: THREE.DoubleSide }, 0.2);
+  for (const z of [L / 2 - 0.75, -0.55]) add(glassL, planeG(1.05, 2.25), doorT, -W / 2 - 0.012, 1.55, z, 0, -PI / 2, 0);
+  const glassG = bake(glassL, dyn(grp(g)));
+  noShadow(B(g, 0.04, 0.05, 1.2, glow('#fff2b0', '#ffc94a', 0.8), -W / 2 - 0.02, 2.73, L / 2 - 0.75));
+  // route sign (front + side), lights, bumpers, mirrors, roof unit
+  const sign = glowMat('busSign', 256, 48, (x, w, h) => { x.fillStyle = '#16181c'; x.fillRect(0, 0, w, h); x.fillStyle = '#ffb02e'; fitText(x, '707  회사앞 · 시청', w / 2, h / 2 + 1, 240, 30); }, 1.1);
+  noShadow(add(g, planeG(1.9, 0.34), sign, 0, 2.72, L / 2 + 0.008));
+  noShadow(add(g, planeG(1.4, 0.26), sign, -W / 2 - 0.008, 2.72, L / 2 - 2.4, 0, -PI / 2, 0));
+  for (const sx of [-1, 1]) {
+    noShadow(S(g, glow('#fffbe8', '#fff1c0', 1.3), sx * (W / 2 - 0.35), 0.75, L / 2 + 0.02, 0.17, 0.11, 0.05, 12, 6));
+    noShadow(S(g, glow('#ff4a3a', '#ff1a0a', 1.0), sx * (W / 2 - 0.3), 0.85, -L / 2 - 0.02, 0.14, 0.1, 0.05, 12, 6));
+    rod(g, 0.02, dark, [sx * (W / 2 - 0.1), 2.6, L / 2], [sx * (W / 2 + 0.25), 2.55, L / 2 + 0.3], 6);
+    RB(g, 0.1, 0.32, 0.12, 0.03, dark, sx * (W / 2 + 0.25), 2.05, L / 2 + 0.32);
+  }
+  RB(g, W + 0.06, 0.26, 0.2, 0.08, trim, 0, 0.3, L / 2 + 0.02, 2);
+  RB(g, W + 0.06, 0.26, 0.2, 0.08, trim, 0, 0.3, -L / 2 - 0.02, 2);
+  RB(g, 1.6, 0.3, 2.6, 0.1, M('#d9dde1', 0.5), 0, H, 0.6, 2);
+  noShadow(add(g, planeG(0.52, 0.13), texMat('busPlate', 160, 40, (x, w, h) => { x.fillStyle = '#f6f7f2'; x.fillRect(0, 0, w, h); x.fillStyle = '#1d1d1d'; fitText(x, '서울70 사 7070', w / 2, h / 2 + 1, 150, 24); }), 0, 0.44, L / 2 + 0.125));
+  const crack = crackable(glassG);
+  return { name: '시내버스', mass: 0, price: 250000000, material: 'metal', set(s) { crack(s === 'broken' || s === 1); } };
+};
+D.scooter = (g, o) => {
+  const col = o.color || '#e8473a', paint = M(col, 0.35, 0.1), dark = M('#2b2d31', 0.6), ch = chrome();
+  const tire = M('#232428', 0.85), rim = M('#c9ced5', 0.35, 0.5);
+  for (const z of [0.6, -0.58]) wheelX(g, 0.19, 0.075, 0, 0.27, z, tire, rim);
+  add(g, torG(0.25, 0.04, 5, 12, PI), paint, 0, 0.3, 0.6, 0, PI / 2, 0);
+  RB(g, 0.32, 0.09, 0.62, 0.03, dark, 0, 0.26, -0.02);
+  RB(g, 0.44, 0.8, 0.16, 0.07, paint, 0, 0.3, 0.42, 2, -0.22);
+  RB(g, 0.44, 0.4, 0.72, 0.14, paint, 0, 0.36, -0.36, 2);
+  RB(g, 0.34, 0.1, 0.62, 0.05, M('#1f2024', 0.75), 0, 0.76, -0.3, 2);
+  rod(g, 0.03, dark, [0, 0.95, 0.47], [0, 1.12, 0.4], 8);
+  rod(g, 0.018, ch, [-0.33, 1.12, 0.4], [0.33, 1.12, 0.4], 8);
+  for (const sx of [-1, 1]) { C(g, 0.03, 0.03, 0.1, dark, sx * 0.3, 1.12 - 0.05, 0.4, 8, 0, 0, PI / 2); rod(g, 0.008, ch, [sx * 0.2, 1.12, 0.42], [sx * 0.26, 1.32, 0.44], 4); RB(g, 0.1, 0.06, 0.02, 0.01, dark, sx * 0.27, 1.32, 0.44); }
+  noShadow(S(g, glow('#fffbe8', '#fff1c0', 1.3), 0, 0.98, 0.5, 0.08, 0.07, 0.05, 12, 6));
+  noShadow(S(g, glow('#ff4a3a', '#ff1a0a', 1.0), 0, 0.62, -0.73, 0.06, 0.04, 0.03, 10, 6));
+  // delivery box on the rear rack
+  const boxM = M('#2f74d0', 0.5);
+  B(g, 0.4, 0.04, 0.38, dark, 0, 0.8, -0.62);
+  RB(g, 0.48, 0.42, 0.46, 0.05, boxM, 0, 0.84, -0.62, 2);
+  const lab = texMat('deliveryBox', 128, 64, (x, w, h) => { x.fillStyle = '#2f74d0'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; fitText(x, '배달', w / 2, 26, 110, 34, '900'); fitText(x, '빠른 배달 24시', w / 2, 52, 110, 13); });
+  noShadow(add(g, planeG(0.4, 0.2), lab, 0, 1.06, -0.851, 0, PI, 0));
+  for (const sx of [-1, 1]) noShadow(add(g, planeG(0.38, 0.19), lab, sx * 0.241, 1.06, -0.62, 0, sx * PI / 2, 0));
+  return { name: '배달 스쿠터', mass: 70, price: 3000000, material: 'metal', ride: 'scooter' };
+};
+D.kickboard = (g, o) => {
+  const col = o.color || '#5cc23c', paint = M(col, 0.4), dark = M('#2b2d31', 0.6), tire = M('#232428', 0.85);
+  RB(g, 0.19, 0.06, 0.95, 0.025, dark, 0, 0.09, 0);
+  RB(g, 0.2, 0.025, 0.9, 0.01, paint, 0, 0.145, -0.02);
+  for (const z of [0.48, -0.48]) add(g, torG(0.07, 0.035, 5, 12), tire, 0, 0.105, z, 0, PI / 2, 0);
+  add(g, torG(0.11, 0.02, 4, 10, PI), paint, 0, 0.11, -0.48, 0, PI / 2, 0);
+  rod(g, 0.025, paint, [0, 0.15, 0.46], [0, 1.08, 0.53], 8);
+  rod(g, 0.016, dark, [-0.25, 1.08, 0.53], [0.25, 1.08, 0.53], 6);
+  for (const sx of [-1, 1]) C(g, 0.022, 0.022, 0.1, M('#1d1e22', 0.8), sx * 0.22, 1.08 - 0.05, 0.53, 8, 0, 0, PI / 2);
+  RB(g, 0.12, 0.05, 0.09, 0.015, dark, 0, 1.06, 0.53);
+  noShadow(add(g, planeG(0.09, 0.05), glow('#9cff8a', '#3cff6a', 1.0), 0, 1.1, 0.53 + 0.001, -0.6));
+  noShadow(S(g, glow('#fffbe8', '#fff1c0', 1.2), 0, 0.85, 0.555, 0.04, 0.035, 0.025, 10, 6));
+  noShadow(add(g, planeG(0.15, 0.6), texMat('kickDeck', 64, 256, (x, w, h) => { x.fillStyle = col; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; x.save(); x.translate(w / 2, h / 2); x.rotate(-PI / 2); fitText(x, '공유킥보드', 0, 0, 200, 30, '900'); x.restore(); }), 0, 0.158, -0.02, -PI / 2));
+  return { name: '공유 킥보드', mass: 14, price: 900000, material: 'metal', ride: 'kickboard' };
+};
+D.busStop = (g) => {
+  const W = 4.2, H = 2.55, Dp = 1.5;
+  const frame = M('#3c4a56', 0.45, 0.4), roofM = M('#2f7f8f', 0.5), seat = M('#c58e55', 0.6);
+  for (const x of [-W / 2, -W / 6, W / 6, W / 2]) RB(g, 0.09, H, 0.09, 0.03, frame, x, 0, -Dp / 2 + 0.1);
+  for (const x of [-W / 2, W / 2]) RB(g, 0.08, H, 0.08, 0.03, frame, x, 0, Dp / 2 - 0.15);
+  const roof = dyn(grp(g, 0, H, 0));
+  RB(roof, W + 0.35, 0.14, Dp + 0.35, 0.05, roofM, 0, 0, 0.08, 2);
+  noShadow(B(roof, W, 0.02, 0.1, glow('#fff6dc', '#ffe0a0', 1.4), 0, -0.02, 0.2));
+  const arr = glowMat('busArrive', 256, 40, (x, w, h) => { x.fillStyle = '#121418'; x.fillRect(0, 0, w, h); x.fillStyle = '#ffb02e'; fitText(x, '707  곧 도착 · 472  5분', w / 2, h / 2 + 1, 240, 22); }, 1.2);
+  RB(roof, 1.3, 0.24, 0.08, 0.02, M('#1b1d22', 0.5), 0.9, -0.36, 0.55);
+  noShadow(add(roof, planeG(1.2, 0.19), arr, 0.9, -0.24, 0.595));
+  // glass: back wall (3 bays) + the right side; the left side is a lit ad box
+  const glassL = new THREE.Group();
+  for (let i = 0; i < 3; i++) add(glassL, planeG(W / 3 - 0.12, H - 0.45), shelterGlass(), -W / 3 + i * W / 3, 0.3 + (H - 0.45) / 2, -Dp / 2 + 0.1);
+  add(glassL, planeG(Dp - 0.35, H - 0.45), shelterGlass(), W / 2, 0.3 + (H - 0.45) / 2, -0.02, 0, PI / 2, 0);
+  const glassG = bake(glassL, dyn(grp(g)));
+  RB(g, 0.24, H - 0.2, Dp - 0.25, 0.04, frame, -W / 2, 0.1, -0.03);
+  const ad = glowMat('shelterAd', 128, 192, (x, w, h) => {
+    const gr = x.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#ffd23f'); gr.addColorStop(1, '#ff8a3a');
+    x.fillStyle = gr; x.fillRect(0, 0, w, h);
+    x.fillStyle = '#7a3a12'; fitText(x, '오늘 저녁은', w / 2, 30, 110, 20, '900'); fitText(x, '치킨', w / 2, 62, 110, 38, '900');
+    x.fillStyle = '#c8742c'; x.beginPath(); x.ellipse(w / 2, 125, 34, 26, -0.3, 0, 7); x.fill(); x.fillStyle = '#f4ead8'; x.fillRect(w / 2 + 20, 98, 7, 26);
+    x.fillStyle = '#fff'; fitText(x, '퇴근길 1+1', w / 2, 172, 110, 18, '900');
+  }, 0.8);
+  for (const s of [1, -1]) noShadow(add(g, planeG(Dp - 0.45, H - 0.6), ad, -W / 2 + s * 0.125, 0.45 + (H - 0.6) / 2, -0.03, 0, s * PI / 2, 0));
+  // route map inside, bench, sign pole
+  noShadow(add(g, planeG(0.9, 0.62), texMat('routeMap', 192, 128, (x, w, h) => {
+    x.fillStyle = '#f6f4ee'; x.fillRect(0, 0, w, h); x.fillStyle = '#2f74d0'; x.fillRect(0, 0, w, 20); x.fillStyle = '#fff'; fitText(x, '노선 안내', w / 2, 11, 180, 14);
+    const cols = ['#2f74d0', '#3f9a4a', '#d8352a']; cols.forEach((c, i) => { x.strokeStyle = c; x.lineWidth = 4; x.beginPath(); x.moveTo(12, 40 + i * 30); for (let k = 1; k < 6; k++) x.lineTo(12 + k * 34, 40 + i * 30 + (k % 2 ? 8 : -6)); x.stroke(); });
+  }), W / 3, 1.35, -Dp / 2 + 0.16));
+  RB(g, W - 1.2, 0.06, 0.4, 0.02, seat, 0.3, 0.44, -Dp / 2 + 0.38);
+  for (const x of [-0.9, 1.5]) B(g, 0.05, 0.44, 0.3, frame, x, 0, -Dp / 2 + 0.36);
+  const px = W / 2 + 0.35, pz = Dp / 2 - 0.1;
+  C(g, 0.04, 0.04, 3.0, frame, px, 0, pz, 10);
+  RB(g, 0.06, 0.6, 0.6, 0.03, M('#2f74d0', 0.45), px, 2.4, pz, 2);
+  const stopT = texMat('busStopSign', 128, 128, (x, w, h) => {
+    x.fillStyle = '#2f74d0'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; x.beginPath(); x.arc(w / 2, 46, 30, 0, 7); x.fill();
+    x.fillStyle = '#2f74d0'; fitText(x, '버스', w / 2, 47, 50, 26, '900'); x.fillStyle = '#fff'; fitText(x, '회사 앞', w / 2, 98, 116, 24, '900');
+  });
+  for (const s of [1, -1]) noShadow(add(g, planeG(0.56, 0.56), stopT, px + s * 0.032, 2.7, pz, 0, s * PI / 2, 0));
+  const crack = crackable(glassG);
+  return { name: '버스 정류장', mass: 0, price: 40000000, material: 'glass', set(s) { const b = s === 'broken' || s === 1; crack(b); roof.rotation.z = b ? 0.07 : 0; roof.position.y = b ? H - 0.12 : H; } };
+};
+D.trafficLight = (g) => {
+  const pole = M('#4f5862', 0.5, 0.35), box = M('#2b2d31', 0.5), dim = (c) => M(c, 0.5, 0, { emissive: c, emissiveIntensity: 0.06 }, 'tlDim' + c);
+  RB(g, 0.3, 0.12, 0.3, 0.03, pole, 0, 0, 0);
+  C(g, 0.07, 0.08, 3.55, pole, 0, 0.1, 0, 10);
+  RB(g, 1.02, 0.34, 0.26, 0.08, box, 0, 3.5, 0, 2);
+  [[-0.32, dim('#e2412f')], [0, dim('#f2b51c')], [0.32, glow('#7dffb0', '#18e06a', 2.0)]].forEach(([x, m]) => {
+    noShadow(add(g, G('tlLens', () => new THREE.CircleGeometry(0.11, 18)), m, x, 3.67, 0.131));
+    add(g, cylG(0.14, 0.14, 0.12, 14, true, PI / 2, PI), M('#1d1e22', 0.5, 0, { side: THREE.DoubleSide }, 'tlHood'), x, 3.67, 0.19, PI / 2);
+  });
+  // pedestrian head (red man off, green man on) + the push button
+  RB(g, 0.3, 0.62, 0.2, 0.05, box, 0, 2.05, 0.1, 2);
+  const man = (key, c, on) => texMat(key, 64, 64, (x, w, h) => { x.fillStyle = '#111'; x.fillRect(0, 0, w, h); x.fillStyle = on ? c : '#3a2522'; x.beginPath(); x.arc(32, 14, 7, 0, 7); x.fill(); x.fillRect(25, 23, 14, 20); x.fillRect(25, 42, 5, 16); x.fillRect(34, 42, 5, 16); }, on ? { emissive: '#ffffff', emissiveMap: null, emissiveIntensity: 0 } : {});
+  noShadow(add(g, planeG(0.22, 0.22), man('pedRed', '#ff4a3a', false), 0, 2.52, 0.201));
+  noShadow(add(g, planeG(0.22, 0.22), glowMat('pedGreen', 64, 64, (x) => { x.fillStyle = '#0d1a10'; x.fillRect(0, 0, 64, 64); x.fillStyle = '#3cff6a'; x.beginPath(); x.arc(30, 12, 7, 0, 7); x.fill(); x.fillRect(24, 21, 13, 20); x.save(); x.translate(26, 40); x.rotate(0.35); x.fillRect(0, 0, 5, 18); x.restore(); x.save(); x.translate(34, 40); x.rotate(-0.4); x.fillRect(0, 0, 5, 18); x.restore(); }, 1.4), 0, 2.24, 0.201));
+  RB(g, 0.16, 0.24, 0.1, 0.03, M('#efb51f', 0.5), 0, 1.0, 0.1, 2);
+  noShadow(add(g, planeG(0.12, 0.08), texMat('pushBtn', 64, 44, (x, w, h) => { x.fillStyle = '#efb51f'; x.fillRect(0, 0, w, h); x.fillStyle = '#1d1d1d'; fitText(x, '누르세요', w / 2, h / 2, 60, 14); }), 0, 1.15, 0.151));
+  return { name: '신호등', mass: 0, price: 8000000, material: 'metal' };
+};
+D.streetLamp = (g) => {
+  const paint = M('#3d4a57', 0.45, 0.4), base = M('#2f3740', 0.5, 0.3);
+  RB(g, 0.32, 0.5, 0.32, 0.06, base, 0, 0, 0, 2);
+  C(g, 0.06, 0.085, 4.0, paint, 0, 0.45, 0, 10);
+  rod(g, 0.045, paint, [0, 4.35, 0], [0, 4.55, 0.22], 8);
+  rod(g, 0.04, paint, [0, 4.55, 0.22], [0, 4.5, 0.5], 8);
+  RB(g, 0.3, 0.12, 0.46, 0.05, paint, 0, 4.36, 0.58, 2);
+  noShadow(add(g, planeG(0.24, 0.38), M('#fff6dc', 0.4, 0, { emissive: '#ffe2a6', emissiveIntensity: 1.1 }, 'lampLens'), 0, 4.355, 0.58, PI / 2));
+  // festival banner on two brackets
+  for (const y of [2.6, 3.5]) rod(g, 0.015, paint, [0, y, 0], [0, y, -0.5], 6);
+  noShadow(add(g, planeG(0.46, 0.92), texMat('lampBanner', 96, 192, (x, w, h) => {
+    x.fillStyle = '#f2a43c'; x.fillRect(0, 0, w, h); x.fillStyle = '#d8352a'; x.fillRect(0, 0, w, 26);
+    x.fillStyle = '#fff'; fitText(x, '가을', w / 2, 13, 80, 18, '900');
+    x.fillStyle = '#7a3a12'; fitText(x, '은행나무', w / 2, 60, 86, 18, '900'); fitText(x, '거리', w / 2, 86, 86, 22, '900');
+    x.fillStyle = '#fff3c4'; for (let i = 0; i < 6; i++) { x.beginPath(); x.ellipse(20 + (i % 3) * 28, 125 + ((i / 3) | 0) * 32, 9, 13, i, 0, 7); x.fill(); }
+  }, { side: THREE.DoubleSide }), 0, 3.05, -0.27, 0, PI / 2, 0));
+  return { name: '가로등', mass: 40, price: 2500000, material: 'metal' };
+};
+D.streetTree = (g, o) => {
+  const trunk = M('#7a5a3e', 0.85), grate = M('#3d4148', 0.6, 0.4);
+  const cols = o.green ? ['#6fae4a', '#8cc05a'] : ['#f0c03a', '#e9a62a'];
+  C(g, 0.1, 0.15, 2.5, trunk, 0, 0, 0, 9);
+  rod(g, 0.06, trunk, [0, 2.2, 0], [0.5, 3.1, 0.2], 6); rod(g, 0.06, trunk, [0, 2.3, 0], [-0.45, 3.2, -0.1], 6); rod(g, 0.05, trunk, [0, 2.4, 0], [0.05, 3.4, -0.45], 6);
+  B(g, 1.1, 0.03, 1.1, grate, 0, 0, 0);
+  cols.forEach((c, k) => {
+    const geo = scatterG('ginkgo' + k + (o.green ? 'g' : ''), new THREE.SphereGeometry(1, 10, 7), 6, 140 + k, (i, r) => {
+      const a = i * 1.05 + k * 0.5, rr = 0.35 + r() * 0.55;
+      return { x: Math.cos(a) * rr, y: 2.9 + r() * 1.3 + (k ? 0.25 : 0), z: Math.sin(a) * rr, sx: 0.65 + r() * 0.35, sy: 0.55 + r() * 0.3, sz: 0.65 + r() * 0.35 };
+    });
+    add(g, geo, M(c, 0.75, 0, null, 'leaf' + c), 0, 0, 0);
+  });
+  return { name: '가로수', mass: 0, price: 0, material: 'plant' };
+};
+D.fountain = (g) => {
+  const stone = M('#e2d9ca', 0.65, 0, { side: THREE.DoubleSide }, 'fountainStone'), stoneD = M('#c9bfae', 0.7), water = T.water();
+  add(g, latheG('fountainBasin', [[1.42, 0], [1.75, 0], [1.8, 0.42], [1.72, 0.5], [1.5, 0.5], [1.46, 0.12], [0, 0.12]], 30), stone, 0, 0, 0);
+  C(g, 0.3, 0.36, 0.95, stoneD, 0, 0.1, 0, 14);
+  const top = dyn(grp(g, 0, 1.0, 0));
+  add(top, latheG('fountainBowl', [[0, 0], [0.3, 0.02], [0.78, 0.2], [0.82, 0.26], [0.74, 0.26], [0.25, 0.1], [0, 0.1]], 24), stone, 0, 0, 0);
+  C(top, 0.12, 0.15, 0.55, stoneD, 0, 0.1, 0, 12);
+  add(top, latheG('fountainBowl2', [[0, 0], [0.4, 0.12], [0.43, 0.17], [0.38, 0.17], [0, 0.07]], 20), stone, 0, 0.6, 0);
+  S(top, M('#d9a93a', 0.35, 0.6), 0, 0.86, 0, 0.09, 0.12, 0.09, 12, 8);
+  const flow = dyn(grp(g));
+  noShadow(C(flow, 1.47, 1.47, 0.02, water, 0, 0.36, 0, 30)).renderOrder = 1;
+  noShadow(add(flow, cylG(0.76, 0.92, 0.82, 20, true), M('#bfe6ff', 0.1, 0, { transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide }, 'waterSheet'), 0, 0.8, 0)).renderOrder = 2;
+  noShadow(add(flow, cylG(0.38, 0.5, 0.45, 16, true), M('#bfe6ff', 0.1, 0, { transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide }, 'waterSheet'), 0, 1.5, 0)).renderOrder = 2;
+  noShadow(C(flow, 0.03, 0.05, 0.4, M('#d8f1ff', 0.1, 0, { transparent: true, opacity: 0.5, depthWrite: false }, 'jetCore'), 0, 1.9, 0, 8)).renderOrder = 2;
+  let low = null;
+  return {
+    name: '분수대', mass: 0, price: 30000000, material: 'ceramic',
+    after() {
+      low = dyn(grp(g)); low.visible = false;
+      noShadow(C(low, 1.47, 1.47, 0.02, water, 0, 0.16, 0, 30)).renderOrder = 1;
+      noShadow(add(low, cylG(1, 1, 0.01, 24), T.puddle(), 0, 0.012, 2.1, 0, 0, 0, 1.4, 1, 0.8));
+    },
+    set(s) { const b = s === 'broken' || s === 1; flow.visible = !b; if (low) low.visible = b; top.rotation.set(b ? 0.12 : 0, 0, b ? 0.42 : 0); top.position.set(b ? 0.35 : 0, b ? 0.78 : 1.0, 0); },
+  };
+};
+D.bollard = (g) => {
+  const st = M('#c9ced5', 0.3, 0.65);
+  C(g, 0.13, 0.14, 0.04, M('#6c7178', 0.5, 0.4), 0, 0, 0, 14);
+  C(g, 0.095, 0.1, 0.78, st, 0, 0.04, 0, 14);
+  add(g, G('bolCap', () => new THREE.SphereGeometry(0.095, 14, 6, 0, PI * 2, 0, PI / 2)), st, 0, 0.82, 0);
+  noShadow(C(g, 0.101, 0.101, 0.07, M('#f2c21b', 0.4, 0, { emissive: '#f2c21b', emissiveIntensity: 0.15 }, 'bolBand'), 0, 0.62, 0, 14));
+  return { name: '볼라드', mass: 22, price: 300000, material: 'metal' };
+};
+D.planterBox = (g, o) => {
+  const w = o.w || 1.6, gran = M('#bdb7ad', 0.75), soil = M('#4a3527', 0.95);
+  RB(g, w, 0.55, 0.7, 0.05, gran, 0, 0, 0, 2);
+  noShadow(B(g, w - 0.12, 0.02, 0.58, soil, 0, 0.53, 0));
+  const bush = scatterG('shrubs' + w, new THREE.SphereGeometry(1, 9, 6), Math.round(w * 4), 160, (i, r) => ({ x: -w / 2 + 0.2 + (i + 0.5) * (w - 0.4) / Math.round(w * 4), y: 0.68 + r() * 0.1, z: (r() - 0.5) * 0.25, sx: 0.2 + r() * 0.08, sy: 0.17 + r() * 0.06 }));
+  add(g, bush, M('#5f9e45', 0.7), 0, 0, 0);
+  const fl = scatterG('flowers' + w, new THREE.SphereGeometry(1, 6, 4), Math.round(w * 7), 161, (i, r) => ({ x: (r() - 0.5) * (w - 0.3), y: 0.82 + r() * 0.1, z: (r() - 0.5) * 0.4, sx: 0.045 }));
+  add(g, fl, M('#f6a6c0', 0.6), 0, 0, 0);
+  add(g, fl, M('#fff3c4', 0.6), 0.09, 0.01, 0.07, 0, 1.3, 0);
+  return { name: '화단', mass: 60, price: 1200000, material: 'plant' };
+};
+D.foodCart = (g) => {
+  const W = 2.6, Dp = 1.9, H = 2.3;
+  const tarp = M('#e8642c', 0.85, 0, { side: THREE.DoubleSide }, 'tarp'), pole = M('#9aa1a8', 0.4, 0.5), steel = M('#c9ced5', 0.3, 0.6);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) C(g, 0.03, 0.03, H, pole, sx * (W / 2 - 0.05), 0, sz * (Dp / 2 - 0.05), 6);
+  // tarp: back + sides, a pitched roof, a sign valance at the front, rolled-up clear front curtain
+  B(g, W, H - 0.2, 0.03, tarp, 0, 0.2, -Dp / 2);
+  for (const sx of [-1, 1]) B(g, 0.03, H - 0.9, Dp, tarp, sx * W / 2, 0.9, 0);
+  for (const sz of [-1, 1]) add(g, boxG(W + 0.2, 0.05, Dp / 2 + 0.2), tarp, 0, H + 0.16, sz * (Dp / 4 + 0.05), sz * 0.32, 0, 0);
+  const val = texMat('pojangSign', 256, 48, (x, w, h) => { x.fillStyle = '#e8642c'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff6dc'; fitText(x, '떡볶이 · 어묵 · 튀김', w / 2, h / 2 + 1, 240, 30, '900'); });
+  B(g, W + 0.04, 0.42, 0.03, val, 0, H - 0.42, Dp / 2 + 0.01);
+  add(g, cylG(0.09, 0.09, W, 10), M('#e9f3f5', 0.2, 0, { transparent: true, opacity: 0.6 }, 'rolled'), 0, H - 0.47, Dp / 2 + 0.05, 0, 0, PI / 2);
+  // counter with the pots
+  RB(g, W - 0.3, 0.88, 0.6, 0.03, steel, 0, 0, Dp / 2 - 0.4, 2);
+  RB(g, W - 0.24, 0.05, 0.66, 0.02, M('#b07a4a', 0.6), 0, 0.88, Dp / 2 - 0.4);
+  C(g, 0.34, 0.3, 0.08, M('#2b2d31', 0.5, 0.3), -0.65, 0.93, Dp / 2 - 0.38, 18);
+  noShadow(C(g, 0.3, 0.3, 0.02, M('#d8352a', 0.45), -0.65, 0.985, Dp / 2 - 0.38, 18));
+  const rc = scatterG('tteok', new THREE.CylinderGeometry(0.025, 0.025, 0.12, 6), 12, 171, (i, r) => ({ x: (r() - 0.5) * 0.4, y: 1.0, z: (r() - 0.5) * 0.35, rx: PI / 2, ry: r() * 3, sx: 1 }));
+  add(g, rc, M('#f2ead8', 0.5), -0.65, 0, Dp / 2 - 0.38);
+  RB(g, 0.6, 0.18, 0.36, 0.02, steel, 0.25, 0.93, Dp / 2 - 0.38);
+  noShadow(B(g, 0.56, 0.01, 0.32, M('#c99a5a', 0.3, 0, { transparent: true, opacity: 0.85 }, 'broth'), 0.25, 1.1, Dp / 2 - 0.38));
+  for (let i = 0; i < 6; i++) rod(g, 0.006, M('#d8b88a', 0.7), [0.05 + i * 0.08, 1.02, Dp / 2 - 0.42], [0.05 + i * 0.08 + 0.02, 1.34, Dp / 2 - 0.3], 4);
+  RB(g, 0.42, 0.06, 0.3, 0.01, steel, 0.88, 0.93, Dp / 2 - 0.38);
+  const fried = scatterG('twigim', new THREE.SphereGeometry(1, 7, 5), 8, 172, (i, r) => ({ x: (r() - 0.5) * 0.32, y: 1.02, z: (r() - 0.5) * 0.2, sx: 0.06, sy: 0.035, sz: 0.04, ry: r() * 3 }));
+  add(g, fried, M('#e0a64a', 0.6), 0.88, 0, Dp / 2 - 0.38);
+  noShadow(S(g, glow('#fff3c4', '#ffcf7a', 2.0), 0, H - 0.3, 0.2, 0.07, 0.09, 0.07, 10, 6));
+  return { name: '포장마차', mass: 0, price: 6000000, material: 'soft' };
+};
+D.kiosk = (g) => {
+  const W = 2.3, Dp = 1.6, H = 2.45;
+  const body = M('#f2ead8', 0.6), teal = M('#2f7f8f', 0.5), wood = M('#b07a4a', 0.6), dark = M('#2b2d31', 0.6);
+  RB(g, W, 0.95, Dp, 0.05, wood, 0, 0, 0, 2);
+  for (const sx of [-1, 1]) RB(g, 0.25, H - 0.95, Dp, 0.04, body, sx * (W / 2 - 0.125), 0.95, 0, 2);
+  RB(g, W, H - 0.95, 0.12, 0.03, body, 0, 0.95, -Dp / 2 + 0.06, 2);
+  noShadow(add(g, planeG(W - 0.5, H - 1.0), M('#3a2a20', 0.8), 0, 0.95 + (H - 1.0) / 2, -Dp / 2 + 0.125));
+  RB(g, W + 0.1, 0.06, 0.4, 0.02, wood, 0, 0.95, Dp / 2 - 0.05);
+  RB(g, W + 0.2, 0.18, Dp + 0.25, 0.04, teal, 0, H, 0.05, 2);
+  // striped awning over the window
+  const aw = texMat('kioskAwning', 128, 32, (x, w, h) => { for (let i = 0; i < 8; i++) { x.fillStyle = i % 2 ? '#f6f1e6' : '#2f7f8f'; x.fillRect(i * w / 8, 0, w / 8, h); } });
+  add(g, boxG(W + 0.1, 0.04, 0.6), aw, 0, H - 0.1, Dp / 2 + 0.22, 0.45, 0, 0);
+  // menu board + roof sign
+  noShadow(add(g, planeG(1.3, 0.5), glowMat('kioskMenu', 192, 76, (x, w, h) => {
+    x.fillStyle = '#1f2a2c'; x.fillRect(0, 0, w, h); x.fillStyle = '#ffe2a6'; x.font = `bold 15px ${KFONT}`; x.textAlign = 'left';
+    [['아메리카노', '2,000'], ['카페라떼', '2,800'], ['아이스티', '2,500']].forEach(([a, b], i) => { x.fillText(a, 12, 20 + i * 22); x.textAlign = 'right'; x.fillText(b, w - 12, 20 + i * 22); x.textAlign = 'left'; });
+  }, 0.7), 0, 1.75, -Dp / 2 + 0.13));
+  RB(g, 1.2, 0.42, 0.14, 0.05, teal, 0, H + 0.18, 0.2, 2);
+  noShadow(add(g, planeG(1.1, 0.34), glowMat('kioskSign', 192, 60, (x, w, h) => { x.fillStyle = '#2f7f8f'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; fitText(x, '커피 한 잔', w / 2 + 14, h / 2 + 1, 140, 34, '900'); x.strokeStyle = '#fff'; x.lineWidth = 3; x.strokeRect(10, 18, 18, 22); x.beginPath(); x.arc(30, 29, 6, -1.5, 1.5); x.stroke(); }, 0.9), 0, H + 0.39, 0.275));
+  // machine + cups behind the counter
+  RB(g, 0.5, 0.42, 0.36, 0.03, chrome(), -0.45, 0.95, -0.45, 2);
+  for (let i = 0; i < 4; i++) C(g, 0.04, 0.03, 0.11, M('#f6f2ea', 0.5), 0.3 + i * 0.1, 1.0, 0.62, 10);
+  RB(g, 0.3, 0.08, 0.3, 0.02, dark, 0.7, 0.98, -0.4);
+  return { name: '커피 키오스크', mass: 0, price: 15000000, material: 'wood' };
+};
+D.mailbox = (g) => {
+  const red = M('#d8352a', 0.4), dark = M('#2b2d31', 0.6), white = M('#f3f3f1', 0.5);
+  RB(g, 0.42, 0.18, 0.36, 0.03, dark, 0, 0, 0);
+  RB(g, 0.5, 0.9, 0.42, 0.06, red, 0, 0.16, 0, 2);
+  S(g, red, 0, 1.04, 0, 0.25, 0.13, 0.21, 16, 8);
+  noShadow(B(g, 0.3, 0.035, 0.01, dark, 0, 0.82, 0.211));
+  noShadow(add(g, planeG(0.4, 0.2), texMat('mailbox', 128, 64, (x, w, h) => { x.fillStyle = '#d8352a'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; fitText(x, '우체통', w / 2, 24, 110, 28, '900'); x.fillRect(14, 46, 100, 4); fitText(x, '편지 · 엽서', w / 2, 57, 100, 11); }), 0, 0.55, 0.212));
+  noShadow(C(g, 0.05, 0.05, 0.01, white, 0, 0.38, 0.211, 16, PI / 2));
+  return { name: '우체통', mass: 30, price: 600000, material: 'metal' };
+};
+D.flyerStand = (g) => {
+  const wire = M('#c9ced5', 0.35, 0.6), paper = texMat('newspaper', 128, 160, (x, w, h) => {
+    x.fillStyle = '#f2efe6'; x.fillRect(0, 0, w, h); x.fillStyle = '#1d1d1d'; fitText(x, '오늘의 무가지', w / 2, 14, 120, 16, '900');
+    x.fillStyle = '#8a8a8a'; for (let i = 0; i < 14; i++) x.fillRect(8 + (i % 2) * 60, 30 + ((i / 2) | 0) * 16, 52, 4);
+    x.fillStyle = '#d8352a'; x.fillRect(8, 140, 112, 10);
+  });
+  for (const sx of [-1, 1]) { rod(g, 0.012, wire, [sx * 0.2, 0, 0.15], [sx * 0.2, 1.0, -0.12], 6); rod(g, 0.012, wire, [sx * 0.2, 0, -0.15], [sx * 0.2, 1.0, -0.12], 6); }
+  for (let i = 0; i < 3; i++) {
+    const y = 0.22 + i * 0.28, z = 0.08 - i * 0.07;
+    rod(g, 0.01, wire, [-0.2, y, z + 0.06], [0.2, y, z + 0.06], 6);
+    add(g, boxG(0.36, 0.3, 0.02), paper, 0, y + 0.13, z, -0.25, 0, 0);
+  }
+  RB(g, 0.44, 0.12, 0.03, 0.01, M('#2f74d0', 0.5), 0, 1.0, -0.12);
+  noShadow(add(g, planeG(0.4, 0.1), texMat('flyerHead', 128, 32, (x, w, h) => { x.fillStyle = '#2f74d0'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; fitText(x, '무료 신문 · 전단', w / 2, h / 2, 120, 18, '900'); }), 0, 1.06, -0.104));
+  return { name: '무가지 진열대', mass: 6, price: 60000, material: 'paper' };
+};
+D.barrier = (g) => {
+  const orange = M('#f07a24', 0.5), stripe = texMat('barrierStripe', 256, 48, (x, w, h) => {
+    for (let i = -2; i < 12; i++) { x.fillStyle = i % 2 ? '#f6f4ee' : '#e2412f'; x.beginPath(); x.moveTo(i * 28, 0); x.lineTo(i * 28 + 28, 0); x.lineTo(i * 28 + 28 - h, h); x.lineTo(i * 28 - h, h); x.fill(); }
+  });
+  for (const sx of [-0.52, 0.52]) {
+    rod(g, 0.025, orange, [sx, 0, 0.22], [sx, 0.95, 0], 6); rod(g, 0.025, orange, [sx, 0, -0.22], [sx, 0.95, 0], 6);
+    RB(g, 0.12, 0.05, 0.52, 0.02, M('#2b2d31', 0.7), sx, 0, 0);
+  }
+  add(g, boxG(1.24, 0.24, 0.03), stripe, 0, 0.78, 0.04);
+  add(g, boxG(1.24, 0.18, 0.03), stripe, 0, 0.38, 0.09);
+  noShadow(add(g, planeG(0.42, 0.14), texMat('gongsa', 128, 44, (x, w, h) => { x.fillStyle = '#f6f4ee'; x.fillRect(0, 0, w, h); x.fillStyle = '#1d1d1d'; fitText(x, '공사중', w / 2, h / 2 + 1, 120, 32, '900'); }), 0, 0.78, 0.057));
+  noShadow(S(g, glow('#ffe27a', '#ffc21a', 1.6), 0.5, 1.0, 0.02, 0.05, 0.05, 0.05, 10, 6));
+  return { name: '공사 바리케이드', mass: 7, price: 150000, material: 'plastic' };
+};
+D.manhole = (g) => {
+  const m = texMat('manhole', 128, 128, (x, w, h) => {
+    x.fillStyle = '#3a3b3f'; x.beginPath(); x.arc(64, 64, 63, 0, 7); x.fill();
+    x.strokeStyle = '#55575c'; x.lineWidth = 4; for (const r of [56, 40, 24]) { x.beginPath(); x.arc(64, 64, r, 0, 7); x.stroke(); }
+    for (let i = 0; i < 12; i++) { const a = i * PI / 6; x.beginPath(); x.moveTo(64 + Math.cos(a) * 24, 64 + Math.sin(a) * 24); x.lineTo(64 + Math.cos(a) * 56, 64 + Math.sin(a) * 56); x.stroke(); }
+    x.fillStyle = '#6a6c71'; fitText(x, '하수', 64, 64, 40, 18, '900');
+  }, { transparent: true, alphaTest: 0.4, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }, 0.6);
+  noShadow(add(g, G('manholeG', () => new THREE.CircleGeometry(0.42, 24)), m, 0, 0.009, 0, -PI / 2));
+  return { name: '맨홀', mass: 0, price: 0, material: 'metal' };
+};
+D.flagpole = (g, o) => {
+  const col = o.color || '#d8352a', pole = M('#d9dde1', 0.3, 0.6);
+  RB(g, 0.34, 0.12, 0.34, 0.03, M('#9a958c', 0.8), 0, 0, 0);
+  C(g, 0.04, 0.06, 7.2, pole, 0, 0.1, 0, 10);
+  S(g, M('#d9a93a', 0.3, 0.7), 0, 7.36, 0, 0.07, 0.07, 0.07, 10, 6);
+  const flag = G('flagWave', () => { const ge = new THREE.PlaneGeometry(1.5, 1.0, 12, 2), p = ge.attributes.position; for (let i = 0; i < p.count; i++) { const x = p.getX(i) + 0.75; p.setZ(i, Math.sin(x * 4.2) * 0.07 * x); } ge.computeVertexNormals(); return ge; });
+  const ft = texMat('flag' + col, 192, 128, (x, w, h) => {
+    x.fillStyle = col; x.fillRect(0, 0, w, h); x.fillStyle = 'rgba(255,255,255,0.92)'; x.beginPath(); x.arc(58, 64, 34, 0, 7); x.fill();
+    x.fillStyle = col; fitText(x, '가', 58, 66, 50, 46, '900'); x.fillStyle = '#fff'; fitText(x, '가족같은', 140, 50, 90, 22, '900'); fitText(x, '회사', 140, 80, 90, 26, '900');
+  }, { side: THREE.DoubleSide }, 0.85);
+  add(g, flag, ft, 0.78, 6.6, 0);
+  return { name: '깃대', mass: 0, price: 0, material: 'metal' };
+};
+// a ground-floor shop with flats above — static backdrop across the road (opts: text, color, awning, wall, w, floors,
+// kind = window display variant). Few distinct opts keep the merged decor small: every text is one sign material.
+D.shopFront = (g, o) => {
+  const w = o.w || 4.2, n = o.floors || 2, text = o.text || '가게', col = o.color || '#d8352a', wallC = o.wall || '#efe4d2';
+  const H1 = 3.6, Hu = 3.0, Ht = H1 + n * Hu;
+  const wall = M(wallC, 0.85), dark = M('#2b2d31', 0.6), trim = M(shade(wallC, -0.18), 0.7);
+  B(g, w, Ht, 0.5, wall, 0, 0, -0.25);
+  // upper floors: windows (one texture per wall colour, repeated per bay)
+  const upT = canvasTex('p2:upWin' + wallC, 128, 128, (x, W, H) => {
+    x.fillStyle = wallC; x.fillRect(0, 0, W, H); x.fillStyle = shade(wallC, -0.12); x.fillRect(0, 0, W, 8);
+    x.fillStyle = '#5d7e98'; x.fillRect(22, 30, 84, 66); x.fillStyle = '#e9eef2'; x.fillRect(22, 30, 84, 6); x.fillRect(62, 30, 4, 66);
+    x.fillStyle = 'rgba(255,255,255,0.25)'; x.fillRect(28, 40, 12, 50); x.fillStyle = shade(wallC, -0.25); x.fillRect(18, 96, 92, 6);
+  }, { repeat: true });
+  const bays = Math.max(1, Math.round(w / 2.1));
+  const upM = M('#ffffff', 0.8, 0, { map: repTex(upT, bays, n, 'up' + wallC) }, 'upWin' + wallC + bays + 'x' + n);
+  noShadow(add(g, planeG(w, n * Hu), upM, 0, H1 + n * Hu / 2, 0.004));
+  B(g, w + 0.12, 0.3, 0.6, trim, 0, Ht, -0.25);
+  // shop: lit window, door, sign, striped awning
+  B(g, w, 0.2, 0.12, trim, 0, 0, 0.03);
+  const shopT = glowMat('shopIn' + (o.kind || 'a'), 256, 128, (x, W, H) => {
+    const gr = x.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#fff1d6'); gr.addColorStop(1, '#e8c89a'); x.fillStyle = gr; x.fillRect(0, 0, W, H);
+    const r = rng(o.kind ? o.kind.charCodeAt(0) : 7);
+    for (let s = 0; s < 3; s++) { x.fillStyle = '#b08a5a'; x.fillRect(0, 34 + s * 34, W, 4); for (let i = 0; i < 14; i++) { x.fillStyle = ['#d8352a', '#2f74d0', '#3f9a4a', '#efb51f', '#f6a6c0'][(r() * 5) | 0]; x.fillRect(6 + i * 18, 14 + s * 34, 12, 20); } }
+    x.fillStyle = 'rgba(255,255,255,0.35)'; x.beginPath(); x.moveTo(40, 0); x.lineTo(80, 0); x.lineTo(30, H); x.lineTo(-10, H); x.fill();
+  }, 0.5);
+  const winW = w - 1.6;
+  noShadow(add(g, planeG(winW, 2.1), shopT, -0.55, 0.35 + 1.05, 0.006));
+  B(g, winW + 0.1, 0.08, 0.1, dark, -0.55, 0.3, 0.03); B(g, winW + 0.1, 0.08, 0.1, dark, -0.55, 2.45, 0.03);
+  noShadow(add(g, planeG(0.95, 2.25), texMat('shopDoor', 64, 160, (x, W, H) => { x.fillStyle = '#2b2d31'; x.fillRect(0, 0, W, H); x.fillStyle = '#7fa2bf'; x.fillRect(6, 6, W - 12, H - 12); x.fillStyle = '#d9dde1'; x.fillRect(W - 16, 70, 6, 24); }), w / 2 - 0.7, 0.2 + 1.125, 0.006));
+  const signT = texMat('shopSign:' + text + col, 384, 64, (x, W, H) => { x.fillStyle = col; x.fillRect(0, 0, W, H); x.fillStyle = '#ffffff'; fitText(x, text, W / 2, H / 2 + 2, W - 30, 44, '900'); }, { emissive: '#ffffff', emissiveIntensity: 0.18 }, 0.5);
+  RB(g, w - 0.3, 0.72, 0.16, 0.03, M('#3a3c42', 0.6), 0, 2.86, 0.06);
+  noShadow(add(g, planeG(w - 0.42, 0.6), signT, 0, 3.22, 0.145));
+  const awC = o.awning || col;
+  const awT = texMat('awning' + awC, 128, 32, (x, W, H) => { for (let i = 0; i < 8; i++) { x.fillStyle = i % 2 ? '#f6f1e6' : awC; x.fillRect(i * W / 8, 0, W / 8, H); } });
+  add(g, boxG(w - 0.3, 0.04, 0.8), awT, 0, 2.6, 0.42, 0.42, 0, 0);
+  return { name: '상가', mass: 0, price: 0, material: 'wood' };
+};
+D.fireHydrant = (g) => {
+  const red = M('#d8352a', 0.4), redD = M('#a82a22', 0.5), white = M('#f3f3f1', 0.5), brass = M('#c9a227', 0.35, 0.6);
+  C(g, 0.2, 0.22, 0.06, redD, 0, 0, 0, 16);
+  C(g, 0.13, 0.14, 0.56, red, 0, 0.06, 0, 16);
+  noShadow(C(g, 0.141, 0.141, 0.06, white, 0, 0.42, 0, 16));
+  for (const sx of [-1, 1]) { C(g, 0.06, 0.06, 0.14, red, sx * 0.16, 0.42, 0, 12, 0, 0, PI / 2); C(g, 0.07, 0.07, 0.04, brass, sx * 0.24, 0.42, 0, 12, 0, 0, PI / 2); }
+  C(g, 0.075, 0.075, 0.12, red, 0, 0.36, 0.16, 12, PI / 2); C(g, 0.085, 0.085, 0.04, brass, 0, 0.36, 0.23, 12, PI / 2);
+  const top = dyn(grp(g, 0, 0.62, 0));
+  add(top, G('hydDome', () => new THREE.SphereGeometry(0.145, 16, 8, 0, PI * 2, 0, PI / 2)), red, 0, 0, 0);
+  C(top, 0.04, 0.05, 0.08, brass, 0, 0.12, 0, 6);
+  let jet = null;
+  return {
+    name: '소화전', mass: 0, price: 2000000, material: 'metal',
+    after() {
+      jet = dyn(grp(g)); jet.visible = false;
+      const wm = M('#d8f1ff', 0.1, 0, { transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }, 'hydJet');
+      const core = noShadow(add(jet, cylG(0.16, 0.07, 3.2, 10, true), wm, 0, 0.6 + 1.6, 0));
+      core.renderOrder = 2;
+      noShadow(add(jet, sphG(10, 6), wm, 0, 3.8, 0, 0, 0, 0, 0.55, 0.3, 0.55)).renderOrder = 2;
+      noShadow(add(jet, cylG(1, 1, 0.01, 20), T.puddle(), 0, 0.012, 0, 0, 0, 0, 1.3, 1, 1.3));
+      core.onBeforeRender = () => { const t = performance.now() * 0.02; core.scale.set(1 + Math.sin(t) * 0.08, 1 + Math.sin(t * 0.7) * 0.03, 1 + Math.cos(t) * 0.08); };
+    },
+    set(s) { const b = s === 'burst' || s === 1; top.visible = !b; if (jet) jet.visible = b; },
+  };
+};
+D.smokeBooth = (g) => {
+  const W = 2.4, Dp = 1.6, H = 2.4, frame = M('#4f5862', 0.45, 0.4), roofM = M('#3c4a56', 0.5, 0.3);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) RB(g, 0.08, H, 0.08, 0.02, frame, sx * W / 2, 0, sz * Dp / 2);
+  RB(g, W + 0.2, 0.16, Dp + 0.2, 0.04, roofM, 0, H, 0, 2);
+  RB(g, 0.6, 0.22, 0.6, 0.05, M('#9aa1a8', 0.4, 0.5), 0.5, H + 0.16, -0.2, 2);
+  const glassL = new THREE.Group(), gm = shelterGlass();
+  add(glassL, planeG(W - 0.08, H - 0.1), gm, 0, H / 2, -Dp / 2);
+  for (const sx of [-1, 1]) add(glassL, planeG(Dp - 0.08, H - 0.1), gm, sx * W / 2, H / 2, 0, 0, PI / 2, 0);
+  add(glassL, planeG(W / 2 - 0.1, H - 0.1), gm, -W / 4, H / 2, Dp / 2);
+  const glassG = bake(glassL, dyn(grp(g)));
+  B(g, 0.05, H, 0.06, frame, 0, 0, Dp / 2);
+  B(g, W, 0.05, 0.08, frame, 0, 0.3, Dp / 2);
+  RB(g, W - 0.3, 0.05, 0.32, 0.02, M('#c58e55', 0.6), 0, 0.46, -Dp / 2 + 0.22);
+  C(g, 0.12, 0.13, 0.82, M('#c9ced4', 0.3, 0.6), 0.6, 0, 0.1, 14);
+  const signT = texMat('smokeBooth', 256, 40, (x, w, h) => { x.fillStyle = '#2e7d4f'; x.fillRect(0, 0, w, h); x.fillStyle = '#fff'; fitText(x, '흡연부스 · 이곳에서만 흡연', w / 2, h / 2 + 1, 240, 22, '900'); });
+  noShadow(add(g, planeG(W, 0.2), signT, 0, H - 0.18, Dp / 2 + 0.01));
+  const crack = crackable(glassG);
+  return { name: '흡연부스', mass: 0, price: 12000000, material: 'glass', set(s) { crack(s === 'broken' || s === 1); } };
+};
+D.infoPylon = (g) => {
+  const navy = M('#2c3a55', 0.45, 0.2);
+  RB(g, 0.8, 0.1, 0.4, 0.03, M('#9a958c', 0.8), 0, 0, 0);
+  RB(g, 0.7, 2.25, 0.28, 0.06, navy, 0, 0.1, 0, 2);
+  const face = glowMat('pylon', 128, 384, (x, w, h) => {
+    x.fillStyle = '#f6f4ee'; x.fillRect(0, 0, w, h); x.fillStyle = '#2c3a55'; x.fillRect(0, 0, w, 64);
+    x.fillStyle = '#fff'; fitText(x, '가족같은', w / 2, 22, 110, 22, '900'); fitText(x, '회사 타워', w / 2, 46, 110, 22, '900');
+    const rows = [['R', '옥상 정원'], ['12', '임원층'], ['7', '사무실'], ['3', '대강당'], ['1', '로비 · 카페'], ['B1', '회식'], ['B2', '주차장']];
+    rows.forEach(([a, b], i) => { const y = 92 + i * 36; x.fillStyle = '#2f74d0'; x.fillRect(10, y - 13, 30, 26); x.fillStyle = '#fff'; fitText(x, a, 25, y, 28, 16, '900'); x.fillStyle = '#2c3a55'; fitText(x, b, 82, y, 80, 16, 'bold'); });
+    x.fillStyle = '#d8352a'; fitText(x, '현재 위치 · 정문', w / 2, h - 18, 116, 14, '900');
+  }, 0.45);
+  noShadow(add(g, planeG(0.58, 1.75), face, 0, 1.15, 0.141));
+  return { name: '안내 사인', mass: 0, price: 4000000, material: 'glass' };
+};
+D.streetBin = (g) => {
+  const st = M('#5d6b78', 0.45, 0.4), top = M('#3c4a56', 0.5, 0.3);
+  RB(g, 0.92, 0.85, 0.46, 0.05, st, 0, 0, 0, 2);
+  RB(g, 0.96, 0.1, 0.5, 0.04, top, 0, 0.85, 0, 2);
+  for (const sx of [-0.23, 0.23]) noShadow(B(g, 0.32, 0.08, 0.02, M('#1d1e22', 0.7), sx, 0.68, 0.231));
+  noShadow(add(g, planeG(0.84, 0.18), texMat('streetBin', 256, 56, (x, w, h) => { x.fillStyle = '#5d6b78'; x.fillRect(0, 0, w, h); x.fillStyle = '#d8352a'; x.fillRect(4, 6, w / 2 - 8, h - 12); x.fillStyle = '#3f9a4a'; x.fillRect(w / 2 + 4, 6, w / 2 - 8, h - 12); x.fillStyle = '#fff'; fitText(x, '일반쓰레기', w / 4, h / 2 + 1, w / 2 - 16, 22, '900'); fitText(x, '재활용', w * 0.75, h / 2 + 1, w / 2 - 16, 22, '900'); }), 0, 0.45, 0.232));
+  return { name: '거리 쓰레기통', mass: 14, price: 200000, material: 'metal' };
 };
 
 export const PROP2_TYPES = Object.keys(D);

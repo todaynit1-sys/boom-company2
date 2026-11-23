@@ -453,6 +453,7 @@ export function setFloorSky(F, time) {
 }
 
 // floor id → { id, label, sub, name } for menus, panels and HUD
-export const FLOOR_INFO = Object.fromEntries(FLOORS.map((f) => [f.id, { id: f.id, label: f.label, sub: f.sub || '', name: f.name || f.id, key: f.key || null, placeholder: !!f.placeholder }]));
-export const FLOOR_LIST = FLOORS.map((f) => FLOOR_INFO[f.id]);
+export const FLOOR_INFO = Object.fromEntries(FLOORS.map((f) => [f.id, { id: f.id, label: f.label, sub: f.sub || '', name: f.name || f.id, key: f.key || null, placeholder: !!f.placeholder, outside: !!f.outside }]));
+// elevator stops only — spec.outside areas (the street) are reached through a door (spec.portals, main.js)
+export const FLOOR_LIST = FLOORS.filter((f) => !f.outside).map((f) => FLOOR_INFO[f.id]);
 export { FLOORS, FLOOR_BY_ID };

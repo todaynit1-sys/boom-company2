@@ -723,14 +723,17 @@ D.revolvingDoor = (g) => {
     add(g, cylG(1.1, 1.1, 0.04, 20, true, s + PI * 0.18, PI * 0.64), metal, 0, 2.3, 0);
   }
   const wings = dyn(new THREE.Group()); g.add(wings);
-  C(wings, 0.05, 0.05, 2.3, metal, 0, 0.02, 0, 10);
+  // the four wings are built loose, then merged into one mesh per material (2 draws instead of ~21)
+  const loose = new THREE.Group();
+  C(loose, 0.05, 0.05, 2.3, metal, 0, 0.02, 0, 10);
   for (let i = 0; i < 4; i++) {
-    const w = new THREE.Group(); w.rotation.y = i * PI / 2; wings.add(w);
+    const w = new THREE.Group(); w.rotation.y = i * PI / 2; loose.add(w);
     add(w, boxG(1.02, 2.2, 0.015), glass, 0.56, 1.15, 0).castShadow = false;
     B(w, 1.04, 0.05, 0.04, metal, 0.56, 0.03, 0); B(w, 1.04, 0.05, 0.04, metal, 0.56, 2.22, 0);
     B(w, 0.04, 2.24, 0.04, metal, 1.07, 0.03, 0);
     B(w, 0.5, 0.03, 0.05, metal, 0.6, 1.0, 0);
   }
+  for (const p of mergeStatic(loose)) { const m = new THREE.Mesh(p.geo, p.mat); m.castShadow = p.cast; m.receiveShadow = true; wings.add(m); }
   g.userData.wings = wings;
   return { name: '회전문', mass: 0, price: 0, material: 'glass', set(a) { wings.rotation.y = +a || 0; } };
 };

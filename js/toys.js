@@ -24,6 +24,9 @@ export const RIDE = {
   chair: { label: '바퀴의자', speed: 6.4, accel: 2.6, r: 0.42, y: 0, anim: 'sit', ram: 1, back: 0.04, yawOff: 0, seatBack: 0 },
   cart: { label: '택배 카트', speed: 7.0, accel: 2.4, r: 0.52, y: 0.19, anim: 'rageIdle', ram: 1.3, back: -0.15, yawOff: -PI / 2, seatBack: 0 },
   forklift: { label: '지게차', speed: 3.8, accel: 1.8, r: 0.9, y: 0.42, anim: 'sit', ram: 2.4, back: -0.35, yawOff: 0, seatBack: 0, steer: true },
+  // 회사 앞 거리
+  scooter: { label: '배달 스쿠터', speed: 8.2, accel: 2.4, r: 0.55, y: 0.34, anim: 'sit', ram: 1.5, back: -0.28, yawOff: 0, seatBack: 0 },
+  kickboard: { label: '공유 킥보드', speed: 7.4, accel: 2.6, r: 0.4, y: 0.16, anim: 'rageIdle', ram: 1.0, back: -0.05, yawOff: 0, seatBack: 0 },
 };
 // held weapon behaviour by prop type
 export const WEAPON = { megaphone: 'shout', tambourine: 'jingle', trophy: 'club', bottle: 'bottle', beerMug: 'bottle', extinguisher: 'spray' };
@@ -609,6 +612,9 @@ export function createToys(api) {
     const rest = Math.max(0, price - rec.paid);
     const bonus = Math.max(5000, Math.round(price * 0.3));
     api.emit('out', rec);
+    // remembered for the street below: it lies on the plaza as a wreck when you walk out (floors/street.js)
+    const OW = G.outWrecks || (G.outWrecks = []);
+    if (OW.length < 12 && G.floorKind !== 'street') OW.push({ type: rec.type, opts: (rec.sp && rec.sp.opts) || {}, from: G.floorKind });
     after(1.25, () => {
       if (!G.S) return;
       if (!rec.removed) S.phys.remove(rec);

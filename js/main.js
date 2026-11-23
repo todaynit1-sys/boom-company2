@@ -298,7 +298,7 @@ function disposeFloors() {
   }
   G.floors = {}; G.S = null; G.floorKind = null;
 }
-function enterFloor(kind, { at = null, yaw = null, elevator = null } = {}) {
+function enterFloor(kind, { at = null, yaw = null, elevator = null, door = null } = {}) {
   const S = getFloor(kind);
   kind = S.kind;
   if (G.S && G.S !== S) {
@@ -324,11 +324,17 @@ function enterFloor(kind, { at = null, yaw = null, elevator = null } = {}) {
     arriving = ev;
     after(0.1, () => sfx('ding', { vol: 0.6 }));
   } else if (at) { P.pos.set(at.x, 0, at.z); if (yaw != null) P.yaw = yaw; }
+  // came through a door (spec.portals): step out of it on your own, the camera first looks back at the door
+  const dp = door ? (S.F.spec.portals || []).find((q) => q.to === door) : null;
+  if (dp) { P.pos.set(dp.out[0], 0, dp.out[1]); P.yaw = dp.out[2]; }
   P.y = 0; P.vy = 0; P.onGround = true; P.vel.set(0, 0, 0);
-  G.arrive = arriving ? { ev: arriving, t: 0, to: arriving.front.clone().addScaledVector(arriving.fwd, 1.5) } : null;
+  G.arrive = arriving ? { ev: arriving, t: 0, to: arriving.front.clone().addScaledVector(arriving.fwd, 1.5) }
+    : dp ? { door: true, t: 0, to: V(dp.walk[0], 0, dp.walk[1]) } : null;
+  G.doorCam = null;
   placePlayer();
   snapCamera();
   if (arriving) { CAM.pitch = ARRIVE_PITCH; updateCamera(0, true); }
+  if (dp) doorArrived(S, dp);
   toys.prep(S);
   floorHook(S, 'onEnter');
   return S;
@@ -392,7 +398,12 @@ function updateCamera(dt, snap = false) {
   if (P.seated && !snap && G.rtime - CAM.lastLook > 1.3) CAM.yaw = angLerp(CAM.yaw, P.yaw, dt * 2);
   // stepping out of an elevator: stay behind the player, level, then ease back to the normal pitch
   let arrK = 0;
-  if (G.arrive) {
+  // out through a door: look back at the door a moment, then swing round behind the player (mouse look ends it)
+  if (G.doorCam) {
+    const D = G.doorCam; D.t += dt;
+    if ((!snap && G.rtime - CAM.lastLook < 0.05) || D.t > 2.8) G.doorCam = null;
+    else if (D.t > 0.7) { CAM.yaw = angLerp(CAM.yaw, P.yaw, dt * 3.0); CAM.pitch += (basePitch() - CAM.pitch) * Math.min(1, dt * 2.5); }
+  } else if (G.arrive && !G.arrive.door) {
     arrK = 1 - clamp(G.arrive.t / 1.1, 0, 1);
     if (G.rtime - CAM.lastLook > 0.05 || snap) { CAM.yaw = angLerp(CAM.yaw, P.yaw, snap ? 1 : dt * 6); CAM.pitch = ARRIVE_PITCH + (basePitch() - ARRIVE_PITCH) * (1 - arrK) * (1 - arrK); }
   }
@@ -1091,6 +1102,8 @@ function nearestElevator(p) {
 }
 function elevatorObjective(dest) {
   const ev = nearestElevator(P.pos);
+  // an area without elevators (the street): head back in through its door
+  if (!ev) { const pt = (G.S.F.spec.portals || [])[0]; return { pos: pt ? portalGoal(pt) : P.pos.clone(), h: 2.6, kind: 'door', dest, floor: G.floorKind }; }
   return { pos: ev.cabin.clone(), h: 2.6, kind: 'elevator', dest, floor: G.floorKind };
 }
 function objective(o) {
@@ -1736,7 +1749,7 @@ function rampageCandidate() {
 // ================================================================ bill
 function showBill() {
   if (G.scene === 'bill') return;
-  G.scene = 'bill'; G.rampage = false; G.canDamage = false; G.timeLeft = null;
+  G.scene = 'bill'; G.rampage = false; G.canDamage = false; G.timeLeft = null; G.homeWalk = null;
   ui.prompt(null); ui.timer(null); ui.combo(0); ui.elevator(null); ui.vignette(0); ui.subtitle(null, null);
   gfx.clearHighlight(); objective(null);
   releaseLock();
@@ -1777,8 +1790,16 @@ function endRampage() {
   ui.timer(0);
   sfx('whistle', { vol: 0.9 });
   G.slowT = 1.3; G.slowScale = 0.3;
-  ui.banner('끝!', '', 1500);
+  // ended in the lobby or outside: a little 퇴근 walk under the banner (out of the door / away from the tower)
+  const home = G.floorKind === 'lobby' || G.floorKind === 'street';
+  ui.banner(home ? '퇴근!' : '끝!', home ? '오늘은 여기까지' : '', 1500);
   P.controls = false;
+  if (home) {
+    if (toys.riding()) toys.dismount();
+    const A = G.S.F.anchors, to = G.floorKind === 'lobby' ? A.door : V(P.pos.x, 0, P.pos.z + 5);
+    const d = V(to.x - P.pos.x, 0, to.z - P.pos.z); if (d.lengthSq() < 0.04) d.set(0, 0, 1);
+    G.homeWalk = d.normalize(); setFace('relief');
+  }
   after(1.7, () => showBill());
 }
 
@@ -1857,6 +1878,58 @@ function ride(ev, dest) {
   after(0.7, go);
 }
 
+// ================================================================ doors (spec.portals: lobby ⇄ 회사 앞 거리)
+// Prompt-free: during a rampage, walking into a portal's trigger box (moving along `enter`) spins the revolving
+// door, whooshes and fades to the other side, where you step out on your own (enterFloor → door).
+function portalGoal(pt) { const [x0, z0, x1, z1] = pt.box; return V((x0 + x1) / 2 + pt.enter[0] * 0.8, 0, (z0 + z1) / 2 + pt.enter[1] * 0.8); }
+function checkPortals() {
+  const S = G.S, ps = S && S.F.spec.portals;
+  if (!ps || !G.rampage || G.busy || !P.controls || P.seated || G.scene === 'bill' || G.rtime < (G.portalCool || 0)) return;
+  if (_bot && _bot.on && !_bot.forceDest) return; // the bot only goes through when it was sent somewhere
+  const v = toys.riding() ? toys.T.ride.vel : P.vel;
+  for (const pt of ps) {
+    const [x0, z0, x1, z1] = pt.box;
+    if (P.pos.x < x0 || P.pos.x > x1 || P.pos.z < z0 || P.pos.z > z1) continue;
+    if (v.x * pt.enter[0] + v.z * pt.enter[1] < 0.6) continue;
+    doorRide(pt); return;
+  }
+}
+function doorRide(pt) {
+  if (G.busy) return;
+  G.busy = true; P.controls = false; P.vel.set(0, 0, 0);
+  const spin = G.S.F.anchors.doorSpin, from = G.floorKind;
+  if (spin) spin.k = 5;
+  sfx('whoosh', { vol: 0.75, pitch: 0.8 }); sfx('doorOpen', { vol: 0.35 });
+  if (DEBUG) G.doorTrips = (G.doorTrips || 0) + 1;
+  after(0.35, () => transition(null, () => {
+    if (spin) spin.k = 0.35;
+    enterFloor(pt.to, { door: from });
+    P.controls = true;
+    if (G.rampage) {
+      ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: FLOOR_INFO[G.floorKind].name, tone: 'rage' });
+      initTasks(G.floorKind);
+    }
+  }, 450));
+}
+// just came out of a door (enterFloor): spin it, whoosh, first look back at the door if the portal asks for it
+function doorArrived(S, pt) {
+  G.portalCool = G.rtime + 1.2;
+  const spin = S.F.anchors.doorSpin;
+  if (spin) { spin.k = 4; after(0.9, () => { spin.k = 0.35; }); }
+  after(0.05, () => sfx('whoosh', { vol: 0.5, pitch: 0.7 }));
+  if (pt.cam) { CAM.yaw = P.yaw + pt.cam[0]; CAM.pitch = pt.cam[1]; G.doorCam = { t: 0 }; updateCamera(0, true); }
+}
+// how the bot gets to `dest`: { portal } (walk through a door here) or { via } (take the elevator to `via`)
+function routeTo(dest) {
+  const spec = G.S.F.spec, ps = spec.portals || [];
+  const direct = ps.find((q) => q.to === dest);
+  if (direct) return { portal: direct };
+  if (!G.S.F.elevators.length && ps.length) return { portal: ps[0] };
+  const ds = FLOOR_BY_ID[dest];
+  if (ds && ds.outside) { const hub = FLOORS.find((f) => (f.portals || []).some((q) => q.to === dest)); if (hub) return { via: hub.id }; }
+  return { via: dest };
+}
+
 // ================================================================ NPC context
 let _ctx = null;
 const _head = V();
@@ -1874,7 +1947,8 @@ function pickExit(pos, from) {
   let best = null, bs = 1e9;
   const cands = [];
   for (const ev of S.F.elevators) cands.push({ p: ev.front.clone().addScaledVector(ev.fwd, 0.55), leave: true, dir: ev.fwd });
-  if (A.door) cands.push({ p: A.door.clone(), leave: true, dir: V(0, 0, 1) });
+  if (A.door) cands.push({ p: A.door.clone(), leave: true, dir: A.doorDir || V(0, 0, 1) });
+  for (const e of A.leaves || []) cands.push({ p: e.p.clone(), leave: true, dir: e.dir }); // off the ends of the street
   for (const h of A.hide || []) cands.push({ p: h.clone(), leave: false });
   if (A.meeting) cands.push({ p: A.meeting.clone(), leave: false });
   for (const c of cands) {
@@ -1915,6 +1989,8 @@ function updatePlayer(dt) {
     }
   }
   if (!P.controls || G.busy) { mx = 0; mz = 0; }
+  // the rampage ended in the lobby / outside: walk home (퇴근!) under the final banner
+  if (G.homeWalk && !G.busy) { mx = G.homeWalk.x * 0.5; mz = G.homeWalk.z * 0.5; }
   // just arrived by elevator: walk out of the car on your own; any move input after a moment takes over
   if (G.arrive && !G.busy) {
     const A = G.arrive;
@@ -1922,7 +1998,7 @@ function updatePlayer(dt) {
     const [ix, iy] = moveInput();
     if (!A.done) {
       const dx = A.to.x - P.pos.x, dz = A.to.z - P.pos.z, d = Math.hypot(dx, dz);
-      if (d < 0.15 || A.t > 2.4 || (A.t > 0.3 && (ix || iy))) A.done = true;
+      if (d < 0.15 || A.t > 2.4 || (A.t > (A.door ? 0.8 : 0.3) && (ix || iy))) A.done = true;
       else { mx = dx / d * 0.55; mz = dz / d * 0.55; }
     }
     if (A.done && (A.t > 1.1 || ix || iy)) G.arrive = null;
@@ -2069,6 +2145,7 @@ function tick(dt) {
   G.thrust = tu.thrust; G.thrustMax = tu.vmax || 3;
   if (P.attackT > 0) P.attackT -= rdt; // swing cooldown on the real clock: hit-stop / slow-mo never make you slower
   updatePlayer(gdt > 0 ? gdt : rdt * 0.06);
+  checkPortals();
   updateInteract(rdt);
   // physics
   S.phys.step(gdt);
@@ -2218,6 +2295,7 @@ function start(mode, opts = {}) {
   G.paused = false; ui.pause(false); ui.bill(null); ui.title(false); ui.elevator(null); G.evPanel = null;
   ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
   resetDamage(); G.rampage = false; G.canDamage = false; G.timeLeft = null; G.stress = 0; G.queue = []; G.stressLog = [];
+  G.homeWalk = null; G.outWrecks = []; // (things thrown out upstairs this run → wrecks on the street plaza)
   if (G.opts.gender && G.opts.gender !== (P.char.group.name.endsWith('F') ? 'f' : 'm')) setPlayerChar(G.opts.gender);
   // fresh floors (reuse the title office if nobody touched it)
   const keep = G.floors.office && !G.floors.office.used && Object.keys(G.floors).length === 1 && mode === 'story';
@@ -2251,7 +2329,7 @@ function start(mode, opts = {}) {
 function toTitle() {
   G.gen++; G.transN++; G.timers.length = 0;
   releaseLock();
-  G.mode = 'title'; G.scene = 'title'; G.paused = false; G.rampage = false; G.canDamage = false; G.busy = false;
+  G.mode = 'title'; G.scene = 'title'; G.paused = false; G.rampage = false; G.canDamage = false; G.busy = false; G.homeWalk = null;
   ui.pause(false); ui.bill(null); ui.hud(false); ui.prompt(null); ui.elevator(null); ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
   objective(null); G.evPanel = null;
   if (!G.floors.office || G.floors.office.used || Object.keys(G.floors).length > 1) disposeFloors();
@@ -2302,7 +2380,12 @@ function botUpdate(dt) {
     if (G.special >= 1 && !toys.riding()) B.special = true;
     if (toys.riding() && B.forceDest) toys.dismount();
     if (B.forceDest && B.forceDest !== G.floorKind) {
-      const ev = nearestElevator(P.pos); goal = ev.cabin.clone(); B.dest = B.forceDest; near = 0.2;
+      const rt = routeTo(B.forceDest);
+      if (rt.portal) {
+        // walk up to the door, then straight into it (the trigger needs you moving through)
+        const g = portalGoal(rt.portal), ap = g.clone().addScaledVector(V(rt.portal.enter[0], 0, rt.portal.enter[1]), -2.2);
+        goal = Math.hypot(P.pos.x - ap.x, P.pos.z - ap.z) > 0.5 && Math.hypot(P.pos.x - g.x, P.pos.z - g.z) > 2.0 ? ap : g; near = 0.02;
+      } else { const ev = nearestElevator(P.pos); goal = ev.cabin.clone(); B.dest = rt.via; near = 0.2; }
     } else {
       if (B.forceDest === G.floorKind) B.forceDest = null;
       // nearest live target

@@ -63,7 +63,7 @@ scene.add(sun, sun.target);
 const fill = new THREE.DirectionalLight('#cfe0ff', 0.5); fill.position.set(-6, 5, -4); scene.add(fill);
 
 const floorKind = Q.get('floor') || 'carpet';
-const ft = { carpet: () => tex.carpet(), roof: () => tex2.asphaltRoof(), parking: () => tex2.parkingFloor(), hall: () => tex2.hallFloor(), pub: () => tex2.pubFloor(), wood: () => tex2.darkWood(), concrete: () => tex2.concrete() }[floorKind] || (() => tex.carpet());
+const ft = { carpet: () => tex.carpet(), asphalt: () => tex2.asphalt(), paving: () => tex2.pavingStone(), roof: () => tex2.asphaltRoof(), parking: () => tex2.parkingFloor(), hall: () => tex2.hallFloor(), pub: () => tex2.pubFloor(), wood: () => tex2.darkWood(), concrete: () => tex2.concrete() }[floorKind] || (() => tex.carpet());
 const floorTex = ft().clone(); floorTex.needsUpdate = true; floorTex.repeat.set(40, 40);
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.95 }));
 floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
@@ -93,6 +93,12 @@ if (state === 'demo') {
   entries.push({ type: 'ceoSafe', state: 1, lab: 'safe open' }, { type: 'aquarium', state: 'broken', lab: 'aquarium broken' }, { type: 'watertank', state: 'burst', lab: 'tank burst' }, { type: 'watertank', state: 'leak', lab: 'tank leak' },
     { type: 'sojuFridge', state: 'broken', lab: 'fridge broken' }, { type: 'forklift', state: 1, lab: 'forklift up' }, { type: 'barrierGate', state: 1, lab: 'barrier up' }, { type: 'gate', state: 1, lab: 'gate open' },
     { type: 'alarmBell', state: true, lab: 'alarm on' });
+} else if (state === 'street') {
+  // 회사 앞 거리: the new props + their broken states
+  for (const t of ['scooter', 'kickboard', 'bollard', 'mailbox', 'flyerStand', 'barrier', 'streetBin', 'planterBox', 'manhole', 'fireHydrant', 'trafficLight', 'streetLamp', 'streetTree', 'infoPylon', 'kiosk', 'foodCart', 'smokeBooth', 'busStop', 'fountain', 'flagpole']) entries.push({ type: t, opts: {}, lab: t });
+  entries.push({ type: 'fireHydrant', state: 'burst', lab: 'hydrant burst' }, { type: 'busStop', state: 'broken', lab: 'stop broken' }, { type: 'fountain', state: 'broken', lab: 'fountain broken' }, { type: 'smokeBooth', state: 'broken', lab: 'booth broken' });
+  for (const s of [0, 2, 4]) entries.push({ type: 'car', opts: { taxi: true }, state: s, lab: 'taxi ' + s });
+  entries.push({ type: 'bus', state: 0, lab: 'bus' }, { type: 'bus', state: 'broken', lab: 'bus broken' }, { type: 'shopFront', opts: { text: '해바라기 빵집', color: '#e9a62a', kind: 'b' }, lab: 'shopFront' });
 } else {
   let types = PROP2_TYPES;
   if (Q.get('only')) types = Q.get('only').split(',');

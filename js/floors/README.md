@@ -1,7 +1,8 @@
 # Floor modules — contract
 
-One file per floor: `js/floors/<id>.js`, default-exporting a **spec**. `index.js` already imports all seven
-ids (top → bottom: `roof`, `exec`, `office`, `hall`, `lobby`, `pub`, `parking`); phase‑2 work only replaces
+One file per floor: `js/floors/<id>.js`, default-exporting a **spec**. `index.js` imports all seven
+elevator floors (top → bottom: `roof`, `exec`, `office`, `hall`, `lobby`, `pub`, `parking`) plus the outdoor
+`street` (no elevator, see "Areas without elevators" below); phase‑2 work only replaces
 its own file. A floor never imports game code — everything goes through the `ctx` handed to `build(ctx)`,
 the `game` object handed to `hooks`, and plain data (`challenges`, `scene`). Worked example: `parking.js`.
 
@@ -86,6 +87,7 @@ rotate. Progress is **per floor** and persists for the run. `n` defaults to 1; c
 | `fly` | extinguisher flight | — |
 | `lift` | forklift lifted something | `type` / `tag` |
 | `carStage` | car damage stage reached (n = 1 glass … 4 wreck) | `tag` (e.g. `bossCar`) |
+| `topple` | street lamp knocked flat (`street.js` hook emits it) | `type` |
 | `count` | legacy counters: `key` = `paper`, `coffee`, `special`, `plantKick`, `chairHit`, `<type>` | — |
 
 Floor hooks can count anything with `game.emit(kind, rec)` (bumps `kind`, `kind:type`, `kind#tag`).
@@ -114,6 +116,19 @@ scene: { id: 'hallSetup', time: '오후 2:00', title: '시무식 의자 깔기',
 Several instant keys may share one step; the blocking key (`wait`, `goto`, `walk`, `hold`, `recMove`) ends it.
 If the player wanders to another floor during `walk`/`hold`, the marker points back to the elevator. Keep it
 40–60 s, end on a stress bump; the next scene card follows automatically.
+
+## Areas without elevators — `outside` + `portals` (회사 앞 거리)
+`street.js` sets `outside: true` (kept off the elevator panel / `FLOOR_LIST`, still in `FLOOR_INFO` and the title
+picker) and is reached through a door. Both sides declare a portal:
+```js
+portals: [{ to: 'lobby', box: [x0, z0, x1, z1], enter: [0, -1], out: [x, z, yaw], walk: [x, z], cam: [yawOffset, pitch] }]
+```
+During a rampage, walking (or riding) into `box` while moving along `enter` spins the door (`anchors.doorSpin =
+{ a, k }`, the floor's animate reads it), whooshes and fades to `to`; there you appear at that floor's own portal
+`out` (the one whose `to` is where you came from), step out to `walk` on your own, and `cam` (optional) first looks
+back at the door before the camera swings behind you. The bot (`__ppg.ride(id)`) routes through doors
+(office → lobby elevator → door → street). Fleeing people use `anchors.door` + `anchors.doorDir` and
+`anchors.leaves: [{ p, dir }]` (run off the ends of the street).
 
 ## Hooks (optional) — `game` API
 `onEnter(game)`, `onTick(game, dt)`, `onDestroy(game, rec)`, `onInteract(game, cand)`, `candidate(game) → { id, pos, h, obj, text, hold, range, onDone }`.

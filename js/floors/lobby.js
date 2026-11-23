@@ -9,6 +9,8 @@ export default {
   light: (time) => (time === 'sunset' ? 'sunset' : 'lobby'),
   skyFor: (time) => (time === 'sunset' ? 'sunset' : 'day'),
   music: 'lobby', stepSfx: 'step',
+  // walk into the revolving door (during a rampage) → 회사 앞 거리 (street.js). Fields: see street.js portals.
+  portals: [{ to: 'street', box: [1.9, -7.8, 4.1, -7.3], enter: [0, -1], out: [3.0, -7.0, 0], walk: [3.0, -5.3] }],
 
   build(ctx) {
     const { M, V } = ctx;
@@ -37,7 +39,8 @@ export default {
     ctx.box(2.3, 0.06, 0.1, M.alu(), 3.0, 2.44, -9);
     const rd = ctx.liveProp('revolvingDoor', 3.0, 0, -9);
     ctx.rect(3.0, -9, 1.15, 1.15, 0, 2.4);
-    ctx.animate((dt, t) => rd.set(t * 0.35));
+    const spin = A.doorSpin = { a: 0, k: 0.35 }; // main.js spins it faster while you go through (→ 회사 앞 거리)
+    ctx.animate((dt) => { spin.a += dt * spin.k; rd.set(spin.a); });
     A.door = V(3.0, 0, -7.5);
     // outside: sidewalk, road, lawn, trees
     const out = (w, d, m, x, z, y = -0.02) => { const g = new ctx.THREE.PlaneGeometry(w, d); const o = new ctx.THREE.Mesh(g, m); o.rotation.x = -PI / 2; o.position.set(x, y, z); o.receiveShadow = true; ctx.add(o); };
