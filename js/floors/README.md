@@ -132,7 +132,8 @@ emit(kind, rec) stress(d) alarm(pos, r) hitRec(rec, dmg, dir, power) setState(re
 * `ctx.prop` merges a prop's parts into a few meshes (and batches repeats), so `geometry.parameters` is gone on
   the result — find parts by material / `material.map`, not by geometry size.
 * Targeting heights: punches / kicks (`pickTarget`) ignore bodies whose centre is above y 2.2 (2.8 for hung
-  things); the E prompt (pick up / flip / ride) ignores bodies above y 1.6. Put interactive things lower.
+  things) unless their bottom edge is below 1.5 m (tall curtains, a stage screen stay punchable); the E prompt
+  (pick up / flip / ride) ignores bodies above y 1.6. Put interactive things lower.
 * E on a table with something small on it: **tap E** picks the thing up, **hold E** flips the table (one prompt).
 * Throws leave the hand at shoulder height (~1.4 m) with a slight arc; facing a window row / out-zone within 8 m,
   the throw aims at the middle of the nearest pane (broken panes preferred) or the zone edge. The player can never

@@ -1452,7 +1452,8 @@ function pickTarget(range, includeNpc = true) {
   for (const r of S.phys.records) {
     if (r.removed || r.held || r.riding || r.out || r.destroyed && r.mass < 15) continue;
     const p = r.body.position;
-    if (p.y > (r.hang ? 2.8 : 2.2)) continue;
+    // too high to punch — unless it reaches down to arm height (tall curtains, a big screen on the stage)
+    if (p.y > (r.hang ? 2.8 : 2.2) && p.y - r.hy > 1.5) continue;
     const dx = p.x - P.pos.x, dz = p.z - P.pos.z;
     const reach = range + Math.min(0.6, Math.max(r.hx, r.hz) * 0.7);
     const d = Math.hypot(dx, dz);
@@ -2310,7 +2311,7 @@ function botUpdate(dt) {
         tr = null; let bd = 1e9;
         for (const r of G.S.phys.records) {
           if (r.removed || r.destroyed || r.held || r.riding || r.out || r.price <= 0 || (B.skip.get(r) || 0) > G.rtime) continue;
-          const p = r.body.position; if (p.y > 1.8) continue;
+          const p = r.body.position; if (p.y > 1.8 && p.y - r.hy > 1.5) continue;
           const d = Math.hypot(p.x - P.pos.x, p.z - P.pos.z) + (r.mass < 1 ? 1.5 : 0);
           if (d < bd) { bd = d; tr = r; }
         }
