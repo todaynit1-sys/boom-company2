@@ -1718,7 +1718,8 @@ function rampageCandidate() {
     {
       const pk = pick, dk = desk, verb = WEAPON[pk.type] ? '들기' : '집기';
       return {
-        id: 'rec' + dk.id, rec: dk, // same id as the plain table prompt: the hold keeps counting if the small thing changes tapRec: pk, pos: V(dp.x, 0, dp.z), h: 0.55, obj: pk.group,
+        // same id as the plain table prompt: the hold keeps counting if the small thing changes
+        id: 'rec' + dk.id, rec: dk, tapRec: pk, pos: V(dp.x, 0, dp.z), h: 0.55, obj: pk.group,
         text: TOUCH ? `엎기(꾹) · 톡: ${verb}` : `엎기(꾹) · 톡: ${verb}`, hold: 0.42, range: 99,
         onDone: () => flipDesk(dk), onTap: () => pickUp(pk),
       };
