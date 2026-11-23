@@ -20,8 +20,10 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
   // hold Z: repeats
   const anims0 = s.money;
   await I.down('KeyZ');
-  let swings = 0, prev = false;
-  for (let i = 0; i < 60; i += 2) { await step(2); const a = await ev('__ppg.P.attackT > 0'); if (a && !prev) swings++; prev = a; }
+  // swings counted by their whoosh (the cooldown flag can re-arm within one tick, so sampling it misses swings)
+  const w0 = (await ev('__ppg.sfxCount()')).whooshPunch || 0;
+  for (let i = 0; i < 60; i += 2) await step(2);
+  const swings = ((await ev('__ppg.sfxCount()')).whooshPunch || 0) - w0;
   await I.up('KeyZ'); s = await step(20);
   expect(swings >= 3, `holding Z keeps punching (${swings} swings in 1 s, money ${anims0} → ${s.money})`);
   const after = await step(30); const a2 = await ev('__ppg.P.attackT > 0');
