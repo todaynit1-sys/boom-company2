@@ -80,6 +80,7 @@ export default {
     ctx.F.bodies.push({ x: 0, y: 3.21, z: FACADE + 1.42, hx: 3.7, hy: 0.13, hz: 1.45, rot: 0 });
     for (const sx of [-1, 1]) ctx.box(0.22, 3.08, 0.22, steel, sx * 3.2, 0, FACADE + 2.6, { collide: true });
     A.posts = [V(-3.2, 0, FACADE + 2.6), V(3.2, 0, FACADE + 2.6)];
+    A.camLid = { x0: -3.9, x1: 3.9, z0: FACADE - 0.2, z1: FACADE + 3.05, y: 2.85 }; // camera stays under the canopy
     [...COMPANY].forEach((ch, i) => ctx.prop('logoLetter', -2.65 + i * 1.06, FACADE + 2.45, 0, { char: ch, h: 0.88, color: i % 2 ? '#2f6fd6' : '#d8352a', y: 3.34, as: 'hang', tag: 'sign' + i, noCast: true }));
     ctx.npc('workerM1', 2.25, FACADE + 1.75, { rotY: 0.25, anim: 'armsCrossed', role: 'guard', face: 'normal', variantSeed: 301,
       look: { suit: '#27324a', pants: '#27324a', shirt: '#dfe6ee', tie: '#1b1f2a', lanyard: false, glasses: false },
@@ -166,7 +167,7 @@ export default {
     ctx.collider(0, HD + 0.3, HW, 0.3, H);
 
     // ---------------- anchors: free-mode start (diagonal: tower on the left, street ahead), hiding spots, exits
-    ctx.spawn(-5.2, -8.0, 1.1);
+    ctx.spawn(1.6, -5.4, 0.7); // (portrait camera stays clear of the canopy)
     ctx.hide(-10.9, -9.4); ctx.hide(-13.6, -8.8); ctx.hide(14.6, -8.3); ctx.hide(-9.6, 9.6); ctx.hide(12.6, 9.7);
     A.leaves = [
       { p: V(-HW + 0.6, 0, -6.0), dir: V(1, 0, 0) }, { p: V(HW - 0.6, 0, -6.0), dir: V(-1, 0, 0) },

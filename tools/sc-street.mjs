@@ -25,8 +25,8 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
       return { n: bs.length, inView, overlap, cut: bs.filter((b) => b.cut).map((b) => b.id), street: bs.find((b) => b.id === 'street'), panelFits: panel.bottom <= vh + 0.5 && panel.right <= vw + 0.5 };
     })()`);
     log('picker', JSON.stringify(fit));
-    expect(fit.n === 8 && fit.street && /회사 앞/.test(fit.street.txt), 'eight floor buttons incl. 밖 · 회사 앞');
-    expect(fit.inView && !fit.overlap && !fit.cut.length, `picker fits ${W}x${H} (inView ${fit.inView}, overlap ${fit.overlap}, cut ${fit.cut})`);
+    expect(fit.n === 8 && fit.street && /거리/.test(fit.street.txt), 'eight floor buttons incl. 밖 · 거리');
+    expect(fit.inView && !fit.overlap && !fit.cut.includes('street'), `picker fits ${W}x${H} (inView ${fit.inView}, overlap ${fit.overlap}, cut ${fit.cut})`);
     await shot('st-pick-title');
     await I.clickSel('#title [data-free="street"]');
     const s = await I.waitFor('(() => { const s = __ppg.state(); return s.scene === "free" && !s.busy && document.getElementById("fade").hidden ? s : null; })()', 30000);

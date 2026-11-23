@@ -439,6 +439,9 @@ function updateCamera(dt, snap = false) {
     const b = F.bounds, inside = P.pos.x > b.minX && P.pos.x < b.maxX;
     if (inside) { pos.x = clamp(pos.x, b.minX + 0.25, b.maxX - 0.25); pos.z = clamp(pos.z, b.minZ + 0.25, b.maxZ - 0.25); }
     pos.y = clamp(pos.y, 0.35, F.ceilY - 0.22);
+    // a low roof inside an open-air area (the street's entrance canopy): stay under it
+    const lid = F.anchors.camLid;
+    if (lid && pos.x > lid.x0 && pos.x < lid.x1 && pos.z > lid.z0 && pos.z < lid.z1) pos.y = Math.min(pos.y, lid.y);
     // pillars / walls between the player and the camera: pull the camera in front of them
     // (skipped inside an elevator cabin; the first ~0.6 m behind the player is ignored so a wall the
     //  player hugs does not shove the camera into their head)
