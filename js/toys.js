@@ -207,11 +207,12 @@ export function createToys(api) {
       break;
     }
     for (const n of S.npcs) {
-      if (n.gone || n.state === 'air' || n.state === 'down') continue;
+      if (!n.targetable || n.state === 'air') continue;
       if (Math.hypot(n.pos.x - cx, n.pos.z - cz) > R.spec.r * 0.6 + 0.35) continue;
       if ((R.cool.get(n) || 0) > now) continue;
       R.cool.set(n, now + 1);
-      if (api.knockNpc(n, f, 1.1)) { api.emit('ram', R.rec); api.emit('knock'); sfx('punch', { vol: 0.7 }); }
+      // run over by a ride: 멘탈 2 (a body on the floor just gets bumped along)
+      if (api.knockNpc(n, f, 1.1, 'ram', { direct: true })) { api.emit('ram', R.rec); sfx('punch', { vol: 0.7 }); }
     }
   }
   // forklift: lift whatever heavy thing sits on the forks (cars first)
@@ -312,7 +313,7 @@ export function createToys(api) {
       if (!tg) return;
       const dir = tg.kind === 'rec' ? V(tg.t.body.position.x - P.pos.x, 0, tg.t.body.position.z - P.pos.z) : V(tg.t.pos.x - P.pos.x, 0, tg.t.pos.z - P.pos.z);
       if (dir.lengthSq() < 1e-4) dir.copy(fwd()); dir.normalize();
-      if (tg.kind === 'npc') { if (api.knockNpc(tg.t, dir, 1.0)) { api.emit('knock'); api.emit('weapon', held); sfx(w === 'jingle' ? 'jingle' : 'punch', { vol: 0.8 }); } }
+      if (tg.kind === 'npc') { sfx(w === 'jingle' ? 'jingle' : 'punch', { vol: 0.8 }); if (api.knockNpc(tg.t, dir, w === 'jingle' ? 0.6 : 0.9, 'weapon', { direct: true, dmg: dmg > 1 ? 2 : 1 })) api.emit('weapon', held); }
       else { api.hitRec(tg.t, dmg, dir, 1.6, { direct: true, big: dmg > 1 }); api.emit('weapon', held); if (w === 'jingle') sfx('jingle', { vol: 0.8, pitch: rnd(0.9, 1.2) }); }
       if (w === 'bottle') { // bottles break on the first hit
         const c = recPos(held);
@@ -341,7 +342,8 @@ export function createToys(api) {
     for (const n of S.npcs) {
       if (n.gone) continue;
       const d = n.pos.distanceTo(c);
-      if (d < 2.6) api.knockNpc(n, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 0.5);
+      // close by: hands over the ears, stumble back (멘탈 1); further: they panic
+      if (d < (big ? 3.4 : 2.6)) api.knockNpc(n, d > 0.05 ? V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize() : fwd(), 0.35, 'shout');
       else if (d < 8) n.alarm(api.npcCtx(), c);
     }
   }
@@ -369,7 +371,12 @@ export function createToys(api) {
     // people in front flinch / flee, light things get blown about
     const S = G.S;
     if ((T.sprayT % 0.3) < dt) {
-      for (const n of S.npcs) { if (!n.gone && n.pos.distanceTo(nz) < 3.2 && ((n.pos.x - P.pos.x) * f.x + (n.pos.z - P.pos.z) * f.z) > 0) n.alarm(api.npcCtx(), P.pos); }
+      for (const n of S.npcs) {
+        if (n.gone || n.pos.distanceTo(nz) >= 3.2 || ((n.pos.x - P.pos.x) * f.x + (n.pos.z - P.pos.z) * f.z) <= 0) continue;
+        // right in the jet: they slip on the foam (멘탈 1, at most once a second); further: they panic
+        if (n.pos.distanceTo(nz) < 2.4 && (n.sprayCool || 0) < G.rtime && n.state !== 'air') { n.sprayCool = G.rtime + 1.2; api.knockNpc(n, f, 0.3, 'spray'); }
+        else n.alarm(api.npcCtx(), P.pos);
+      }
       for (const r of S.phys.records) {
         if (r.removed || r.held || r.fixed || r.riding || r.mass > 6) continue;
         const p = r.body.position, dx = p.x - P.pos.x, dz = p.z - P.pos.z, d = Math.hypot(dx, dz);
@@ -519,7 +526,7 @@ export function createToys(api) {
         if (d > 2.4) continue;
         api.hitRec(r, 1, V(dx / (d || 1), 0, dz / (d || 1)), 3.2 * (1 - d / 2.6), { shake: false, vol: 0.3 });
       }
-      for (const n of S.npcs) { if (!n.gone && n.pos.distanceTo(c) < 2.8) api.knockNpc(n, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.2); }
+      for (const n of S.npcs) { if (!n.gone && n.pos.distanceTo(c) < 2.8) api.knockNpc(n, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.2, 'blast'); }
       api.alarmAt(c, 12);
     });
   }

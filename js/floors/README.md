@@ -164,3 +164,10 @@ emit(kind, rec) stress(d) alarm(pos, r) hitRec(rec, dmg, dir, power) setState(re
 * Don't put things outside `size`: the nav grid and camera clamp use it; walls should sit on the bounds.
 * Preview: `http://localhost:4260/#debug` → `__ppg.start('free', { floor: 'hall' })`, `__ppg.look(yaw, pitch)`,
   `__ppg.near('tag'|type|id, dist)`, `__ppg.auto(true)` (bot), `__ppg.state()`, `__ppg.chal()`, `__ppg.floors()`.
+
+## People: 멘탈 and KO (`ko` challenge)
+Every hit on a person costs 멘탈 (coworkers 3, `boss` / `ceo` / `exec` / `guard` 5; `ctx.npc(…, { mental: n })` overrides):
+punch 1, kick / ride / heavy swing 2, the special or a flung desk 3. At 0 they go 깨꼬닥 for ~10–14 s (stars, soul puff,
+치료비 / 위자료 on the bill), then sit up and stagger out; they never leave the floor bounds or out-zones and are never removed
+while knocked out. Challenge kind `ko` counts distinct people knocked out: `{ id, text, kind: 'ko', n: 3, bonus }`, or one
+role with `role: 'boss'` (= `type`; key `ko:boss`). Rush adds "부장님 / 사장님 기절시키기" by itself when a floor has a boss and no `ko` goal.

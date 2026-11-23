@@ -366,6 +366,7 @@ button.mbtn:active { transform: scale(.98); }
 .r-items td.c { color: #888; text-align: right; padding: 5px 10px; white-space: nowrap; width: 1%; }
 .r-items td.a { text-align: right; font-weight: 900; white-space: nowrap; width: 1%; }
 .r-items tr.empty td { color: #999; text-align: center; padding: 14px 0; }
+.r-items tr.sec td { padding: 10px 0 3px; border-top: 1px dashed #c9c2b4; color: #a4452c; font-weight: 900; font-size: 12.5px; }
 .r-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding-top: 12px; border-top: 2px dashed #cfcabb; }
 .r-total span { font-weight: 900; font-size: 16px; }
 .r-total b { font-family: var(--head-font); font-weight: 400; font-size: 32px; color: #d92335; }

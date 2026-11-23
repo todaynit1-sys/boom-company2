@@ -54,6 +54,7 @@ const canvas = document.getElementById('cv');
 const gfx = createGfx(canvas, { touch: TOUCH, debug: DEBUG });
 const { scene, camera } = gfx;
 const fx = createFx(scene);
+fx.camera = camera; // KO soul puffs turn to face it
 
 // ================================================================ timers (unscaled game clock, step-safe)
 function after(sec, fn) { const t = { at: G.rtime + sec, fn, gen: G.gen }; G.timers.push(t); return t; }
@@ -229,6 +230,7 @@ function unseat() {
   placePlayer();
 }
 function dropCarry() {
+  if (P.carryNpc) { releaseNpc(false); return null; } // a KO'd coworker is put down, never dropped out of the world
   if (!P.carry) return null;
   const o = P.carry; if (o.parent) o.parent.remove(o);
   P.carry = null; P.carryKind = null;
@@ -908,6 +910,9 @@ async function transition(info, setup, ms = 2100) {
 }
 function npcByRole(S, role) { return S.npcs.find((n) => n.role === role); }
 function resetNpc(n, pos, yaw, anim, face) {
+  if (n === P.carryNpc) releaseNpc(false);
+  if (n._glasses) { fx.untoss(n._glasses); n._glasses = null; }
+  n.resetKo();
   n.gone = false; n.group.visible = true; n.panicked = false; n.path = null; n.onArrive = null;
   n.seated = false; n.state = 'idle'; n.t = 0; n.y = 0;
   n.pos.set(pos.x, 0, pos.z); n.yaw = yaw; n.char.setAnim(anim); n.char.setFace(face); n.bubble = null; n.char.group.rotation.x = 0;
@@ -1124,7 +1129,8 @@ const DEFAULT_CHALLENGES = [
   { id: 'd2', text: '사람 3명 날리기', kind: 'knock', n: 3, bonus: 30000 },
   { id: 'd3', text: '필살기 쓰기', kind: 'count', key: 'special', bonus: 40000 },
 ];
-function chalKey(c) { return c.kind === 'count' ? c.key : c.kind + (c.tag ? '#' + c.tag : c.type ? ':' + c.type : ''); }
+// (kind 'ko' takes `role` as its type: { kind: 'ko', n: 2 } any two people, { kind: 'ko', role: 'boss' } the boss)
+function chalKey(c) { const ty = c.type || (c.kind === 'ko' && c.role); return c.kind === 'count' ? c.key : c.kind + (c.tag ? '#' + c.tag : ty ? ':' + ty : ''); }
 // Bill tiers for one minute of rampage (rush / story). Prices are compressed above ₩80k (phys.js → payPrice), so
 // a person lands ≈ ₩0.5–1.3M on any floor, a good run ₩1.5–2M; the scripted bot does ≈ ₩1.5–2.5M.
 // Free mode ranks the same tiers on damage per minute played (min. one minute) — see showBill().
@@ -1194,7 +1200,11 @@ function initTasks(kind) {
   let C = G.chal[kind];
   if (!C) {
     const spec = FLOOR_BY_ID[kind];
-    const src = spec && spec.challenges && spec.challenges.length ? spec.challenges : DEFAULT_CHALLENGES;
+    let src = spec && spec.challenges && spec.challenges.length ? spec.challenges : DEFAULT_CHALLENGES;
+    // rush: a bonus goal for knocking out the floor's boss (부장님 / 사장님), when there is one and no KO goal yet
+    const FS = G.floors[kind] || G.S;
+    const boss = G.mode === 'rush' && FS && FS.npcs.find((n) => n.role === 'boss' && !n.gone);
+    if (boss && !src.some((t) => t.kind === 'ko')) src = src.concat([{ id: 'koBoss', text: boss.spec.name === 'ceo' ? '사장님 기절시키기' : '부장님 기절시키기', kind: 'ko', role: 'boss', bonus: 60000 }]);
     // bonuses in proportion to the bill: a floor's six together pay at most CHAL_BONUS_TOTAL
     const sum = src.reduce((a, t) => a + (t.bonus || 0), 0), bk = sum > CHAL_BONUS_TOTAL ? CHAL_BONUS_TOTAL / sum : 1;
     let pool = src.map((t) => Object.assign({ done: false, doneAt: 0, need: t.n || 1, key: chalKey(t) }, t, { key: chalKey(t), bonus: Math.round((t.bonus || 0) * bk / 1000) * 1000 }));
@@ -1247,15 +1257,15 @@ function emit(kind, rec = null, n = 1, value = null) {
     else { G.counts[k] = (G.counts[k] || 0) + n; fc[k] = (fc[k] || 0) + n; }
   }
 }
-function addItem(name, amount) {
-  const it = G.items.get(name) || { name, count: 0, amount: 0 };
+function addItem(name, amount, people = false) {
+  const it = G.items.get(name) || { name, count: 0, amount: 0, people };
   it.count++; it.amount += amount; G.items.set(name, it);
 }
-function addMoney(amt, worldPos, quiet = false, charge = false) {
+function addMoney(amt, worldPos, quiet = false, charge = false, label = null) {
   if (amt <= 0) return;
   G.money += amt;
   ui.money(G.money, G.rampage || G.mode !== 'story' ? '피해 총액' : '피해액');
-  if (worldPos) { const s = toScreen(worldPos); if (s) ui.moneyPop(s.x, s.y, amt, G.combo); }
+  if (worldPos) { const s = toScreen(worldPos); if (s) ui.moneyPop(s.x, s.y, amt, G.combo, label); }
   if (!quiet) G.payAcc = (G.payAcc || 0) + amt; // one cha-ching per tick, sized by the tick's total (payCue)
   if (charge) G.special = Math.min(1, G.special + amt / 380000);
   if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); }
@@ -1480,12 +1490,16 @@ function pickTarget(range, includeNpc = true) {
     if (s < bs) { bs = s; best = r; kind = 'rec'; }
   }
   if (includeNpc) for (const n of S.npcs) {
-    if (n.gone || n.state === 'air' || n.state === 'down' || n.role === 'barista' && n.seated) continue;
-    const dx = n.pos.x - P.pos.x, dz = n.pos.z - P.pos.z, d = Math.hypot(dx, dz);
+    if (!n.targetable || n.role === 'walker' || n.role === 'barista' && n.seated) continue;
+    // a body on the floor is reached at its middle; it loses to anything else in reach
+    const ko = n.lying || n.isKo;
+    if (ko) n.anchors();
+    const px = ko ? n.chest.x : n.pos.x, pz = ko ? n.chest.z : n.pos.z;
+    const dx = px - P.pos.x, dz = pz - P.pos.z, d = Math.hypot(dx, dz);
     if (d > range + 0.2) continue;
     const a = d > 0.01 ? Math.acos(clamp((dx * f.x + dz * f.z) / d, -1, 1)) : 0;
     if (a > 1.0 && d > 0.7) continue;
-    const s = d + a * 0.9 + 0.35;
+    const s = d + a * 0.9 + (ko ? 0.9 : 0.35);
     if (s < bs) { bs = s; best = n; kind = 'npc'; }
   }
   return best ? { kind, t: best } : null;
@@ -1495,6 +1509,7 @@ function attack(kind) {
   if (P.attackT > 0 || P.seated || G.busy || !P.controls && G.rampage === false) return;
   if (G.canDamage && toys.attack(kind)) return; // riding (forklift fork) or swinging a held weapon
   if (P.held) { throwHeld(); return; }
+  if (P.carryNpc) { if (G.canDamage) releaseNpc(true); return; }
   if (P.carry) return;
   if (!G.canDamage) {
     // story: a frustrated air punch, no damage
@@ -1522,19 +1537,10 @@ function resolveHit(kind) {
   const power = kind === 'kick' ? 2.3 : 1.25;
   if (tg.kind === 'npc') {
     const n = tg.t;
-    const dir = V(n.pos.x - P.pos.x, 0, n.pos.z - P.pos.z).normalize();
-    if (n.knock(npcCtx(), dir, kind === 'kick' ? 1.3 : 0.8)) {
-      emit('knock');
-      sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.8 });
-      sfx('hitSoft', { vol: 0.6 });
-      const hp = V(n.pos.x - dir.x * 0.2, 1.15, n.pos.z - dir.z * 0.2);
-      fx.impact(hp, kind === 'kick' ? 1.2 : 0.95, !isCalm());
-      fx.sparks(hp, 6, 3, dir);
-      shake(0.4); hitStop(kind === 'kick' ? 'kick' : 'punch'); camKick(dir, kind === 'kick' ? 0.16 : 0.1);
-      bumpCombo();
-      alarmAt(n.pos, 9);
-      if (Math.random() < 0.4) after(0.5, () => n.say(['아야…', '왜 나한테!', '산재 처리 되나요?!'][(Math.random() * 3) | 0], 1.8, G.rtime));
-    }
+    const dir = V(n.pos.x - P.pos.x, 0, n.pos.z - P.pos.z);
+    if (dir.lengthSq() < 1e-4) dir.copy(facing()); dir.normalize();
+    sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.8 });
+    hitPerson(n, dir, kind === 'kick' ? 'kick' : 'punch', { direct: true });
     return;
   }
   const r = tg.t;
@@ -1542,6 +1548,195 @@ function resolveHit(kind) {
   if (dir.lengthSq() < 1e-4) dir.copy(facing()); dir.normalize();
   sfx(kind === 'kick' ? 'kick' : 'punch', { vol: 0.65 });
   hitRec(r, kind === 'kick' ? 2 : 1, dir, power, { direct: true, kick: kind === 'kick', big: kind === 'kick' });
+}
+// ---- people: 멘탈 hits → 깨꼬닥 (KO), payouts, domino, carrying a KO'd body ---------------------------------
+// kind → [fly-back power, 멘탈 cost] (kick / special / a flung desk > punch); coworkers have 3, bosses / security 5
+const PERSON_HIT = {
+  punch: [0.55, 1], kick: [1.25, 2], weapon: [0.8, 1], special: [1.5, 3], thrown: [0.9, 1], ram: [1.1, 2],
+  domino: [0.8, 1], blast: [1.2, 2], shout: [0.35, 1], spray: [0.3, 1], knock: [1.0, 1],
+};
+// KO pay: a coworker ≈ a mid-size prop (치료비), the boss / CEO a jackpot (위자료); a repeat KO of the same person pays ¼
+const KO_PAY = { worker: 20000, guard: 40000, exec: 40000, boss: 120000, ceo: 120000 };
+function koPayOf(n) { return KO_PAY[n.role] || KO_PAY.worker; }
+function koBillLine(n) {
+  if (n.role === 'ceo' || n.spec.name === 'ceo') return '사장님 기절 — 위자료';
+  if (n.role === 'boss') return '부장님 기절 — 위자료';
+  if (n.role === 'exec') return '기절시킨 임원 — 위자료';
+  if (n.role === 'guard') return '기절시킨 경비원 — 치료비';
+  return '기절시킨 직원 — 치료비';
+}
+const _hp = V(), _bv = V();
+// every hit on a person goes through here (fists, kicks, weapons, rides, the special, flung props, flying people…)
+function hitPerson(n, dir, kind = 'punch', o = {}) {
+  if (!n || n.gone || !G.S) return 0;
+  const k = PERSON_HIT[kind] || PERSON_HIT.knock;
+  const power = o.power != null ? o.power : k[0], dmg = o.dmg != null ? o.dmg : k[1];
+  const chair = n.seated && n.seat && n.seat.chair && n.seat.chair.rec;
+  const r = n.hit(npcCtx(), dir, power, dmg, kind);
+  if (!r) return 0;
+  const direct = !!o.direct, soft = kind === 'shout' || kind === 'spray';
+  // knocked off the chair: the chair skids away too
+  if (chair && !chair.removed && !soft) hitRec(chair, 0, dir, 1.3, { shake: false, vol: 0.5 });
+  if (r !== 3) emit('knock');
+  if (direct || kind === 'special') bumpCombo();
+  const hp = _hp.set(n.pos.x - dir.x * 0.15, n.y + (r === 3 ? 0.3 : 1.0) * n.sc, n.pos.z - dir.z * 0.15);
+  if (r === 3) sfx('bonk', { vol: 0.55, pitch: rnd(0.9, 1.15) });
+  else if (!soft) { sfx('hitSoft', { vol: 0.65 }); if (!direct) sfx('punch', { vol: 0.45, pitch: 0.85 }); }
+  if (!soft) { fx.impact(hp, (kind === 'kick' || kind === 'special' ? 1.2 : 0.95) * (r === 3 ? 0.7 : 1), !isCalm()); fx.sparks(hp, 5, 3, dir); }
+  if (direct) {
+    shake(r === 3 ? 0.2 : 0.4); camKick(dir, kind === 'kick' ? 0.16 : 0.1); vibrate(r === 2 ? 40 : 15);
+    if (r !== 2) hitStop(kind === 'kick' ? 'kick' : 'punch');
+  } else if (r !== 3 && o.shake !== false && !soft) shake(0.3);
+  if (r === 2) koHit(n, dir);
+  if (r !== 3) alarmAt(n.pos, 9);
+  return r;
+}
+// the blow that knocks someone out: a beat of hang-time, then the twirl + flop (npcKo 'land' pays)
+function koHit(n, dir) {
+  const calm = isCalm(), vip = n.vip;
+  const stop = vip ? HITSTOP.special : HITSTOP.crash;
+  hitStop(stop);
+  const sl = calm ? 0.1 : vip ? 0.75 : 0.32, sc = vip ? 0.3 : 0.4;
+  slowMo(sl, sc); fovPunch(vip ? 6 : 3); shake(vip ? 0.8 : 0.55);
+  // real seconds until the body meets the floor (the slide-whistle's thud lands there)
+  const air = n.airT, slowPart = Math.min(sl, air / sc);
+  const at = (calm ? 0.03 : stop) + slowPart + Math.max(0, air - slowPart * sc);
+  sfx('ko', { vol: 0.85, at: clamp(at, 0.3, 1.4) });
+  if (vip && n.char.hasGlasses) {
+    // the boss's glasses fly off and land nearby (back on when he wakes)
+    n.char.setGlasses(false);
+    const gl = makeGlasses();
+    fx.toss(gl, _c.set(n.pos.x, n.y + 1.2 * n.sc, n.pos.z), V(dir.x * 2.2 + rnd(-0.8, 0.8), 3.6, dir.z * 2.2 + rnd(-0.8, 0.8)), 12, G.S.F.group);
+    n._glasses = gl;
+  }
+}
+let GLASSES = null;
+function makeGlasses() {
+  if (!GLASSES) {
+    const m = new THREE.MeshStandardMaterial({ color: '#2a2220', roughness: 0.4 });
+    const g = new THREE.Group(), inner = new THREE.Group(); inner.rotation.x = -PI / 2; inner.position.y = 0.012; g.add(inner);
+    const ring = new THREE.TorusGeometry(0.052, 0.008, 4, 14);
+    for (const s of [1, -1]) { const r = new THREE.Mesh(ring, m); r.position.x = s * 0.06; inner.add(r); }
+    const br = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.05, 5), m); br.rotation.z = PI / 2; inner.add(br);
+    for (const s of [1, -1]) { const tp = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.15, 4), m); tp.rotation.x = PI / 2; tp.position.set(s * 0.11, 0, -0.07); inner.add(tp); }
+    inner.traverse((x) => { if (x.isMesh) x.castShadow = true; });
+    GLASSES = g;
+  }
+  return GLASSES.clone();
+}
+// NPC landing (bounce / first touch): dust, thump
+function npcLand(n, phase, hs) {
+  fx.dustRing(_c.set(n.pos.x, 0, n.pos.z), clamp(0.35 + hs * 0.08, 0.4, 1.0), phase === 'bounce' ? 10 : 7);
+  sfx('land', { vol: clamp(0.3 + hs * 0.06, 0.3, 0.75), pitch: rnd(0.75, 0.9) });
+  if (hs > 4 && G.S) shake(0.25);
+}
+// KO lifecycle hooks from npc.js: 'land' (out cold → pay), 'ghost', 'glasses', 'wake', 'dizzy', 'trip'
+function npcKo(n, phase) {
+  if (phase === 'land') {
+    fx.koStars(n);
+    if (n.vip) n.char.setTieFlop(1);
+    const first = n.koCount === 1, full = koPayOf(n), amt = first ? full : Math.round(full / 4000) * 1000;
+    if (G.canDamage && amt > 0) {
+      n.anchors();
+      addMoney(amt, _hp.set(n.head.x, n.head.y + 0.6, n.head.z), false, true, n.role === 'boss' || n.role === 'ceo' || n.role === 'exec' ? '위자료' : '치료비');
+      addItem(koBillLine(n), amt, true);
+      bumpCombo();
+    }
+    count('koAll');
+    if (first) { count('ko'); emit('ko', { type: n.role }); }
+    n.say(n.vip ? pickOne(['연봉… 올려… 줄게…', '휴가… 다 써도… 돼…', '자네… 승진… 이야…']) : pickOne(['꼬르륵…', '깨꼬닥…', '…(꽥)', '퇴근… 하고… 싶다…']), n.vip ? 3.6 : 2.8, G.rtime);
+    if (n.vip) { n.char.setFace('ko'); bigMoment('crash', 4); }
+    // witnesses gasp
+    const ctx = npcCtx();
+    let gasps = 0;
+    for (const m of G.S.npcs) {
+      if (m === n || m.gone || m.pos.distanceTo(n.pos) > 7) continue;
+      if (m.witness(ctx, n.pos) && gasps < 2 && Math.random() < 0.7) { gasps++; sfx('gasp', { vol: 0.45, pitch: rnd(0.95, 1.3) }); }
+    }
+  } else if (phase === 'ghost') { fx.ghost(n); sfx('soul', { vol: 0.5 }); }
+  else if (phase === 'wake') { n.char.setTieFlop(0); sfx('soulBack', { vol: 0.45 }); }
+  else if (phase === 'glasses') { if (n._glasses) { fx.untoss(n._glasses); n._glasses = null; } n.char.setGlasses(true); }
+  else if (phase === 'dizzy') fx.koStars(n);
+  else if (phase === 'keep') { if (n.starsOn) fx.koStars(n); if (n.ghostOn) fx.ghost(n); }
+  else if (phase === 'trip') count('trip');
+}
+const pickOne = (a) => a[(Math.random() * a.length) | 0];
+function npcGround(x, z) { const F = G.S && G.S.F; return F && F.grounds.length ? groundAt(F, x, z) : 0; }
+// people (flying, sliding, thrown) never leave the floor: room bounds + out-zones (windows / roof edges)
+function keepNpcIn(pos, r) {
+  const F = G.S && G.S.F; if (!F) return;
+  const b = F.bounds, m = r + 0.05;
+  if (pos.x < b.minX + m) pos.x = b.minX + m; else if (pos.x > b.maxX - m) pos.x = b.maxX - m;
+  if (pos.z < b.minZ + m) pos.z = b.minZ + m; else if (pos.z > b.maxZ - m) pos.z = b.maxZ - m;
+  for (const Z of F.outZones) {
+    const a = Z.axis === 'z' ? pos.x : pos.z;
+    if (a < Z.from - 0.3 || a > Z.to + 0.3) continue;
+    const c = Z.axis === 'z' ? pos.z : pos.x, d = (c - Z.at) * Z.side;
+    if (d > -m && d < 3) { const v = Z.at - Z.side * m; if (Z.axis === 'z') pos.z = v; else pos.x = v; }
+  }
+}
+// flying people knock over whoever is in the way (each takes a 멘탈 hit; the flyer slows down)
+function updateDomino() {
+  const S = G.S;
+  for (const a of S.npcs) {
+    if (a.state !== 'air' || a.gone || a.y > 1.4 || a.trip_) continue; // (a trip is just a stumble)
+    const v2 = a.vel.x * a.vel.x + a.vel.z * a.vel.z; if (v2 < 9) continue;
+    for (const b of S.npcs) {
+      if (b === a || !b.targetable || b.state === 'air' || b.isKo) continue;
+      const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, rr = a.r + b.r + 0.08;
+      if (dx * dx + dz * dz > rr * rr) continue;
+      const sp = Math.sqrt(v2);
+      _d.set(a.vel.x / sp, 0, a.vel.z / sp);
+      if (hitPerson(b, _d, 'domino', { power: clamp(0.45 + sp * 0.09, 0.7, 1.2) })) {
+        a.vel.x *= 0.5; a.vel.z *= 0.5;
+        count('domino'); emit('domino');
+        break;
+      }
+    }
+  }
+}
+// E 들기 on a KO'd body: carry it like a log, click / E to fling it (it stays out cold; walls + out-zones stop it)
+function koCandidate(f) {
+  let best = null, bs = 1e9;
+  for (const n of G.S.npcs) {
+    if (n.gone || n.state !== 'ko') continue;
+    n.anchors();
+    const cx = n.chest.x, cz = n.chest.z, dx = cx - P.pos.x, dz = cz - P.pos.z, d = Math.hypot(dx, dz);
+    if (d > 1.5) continue;
+    const a = d > 0.01 ? Math.acos(clamp((dx * f.x + dz * f.z) / d, -1, 1)) : 0;
+    if (a > 1.2 && d > 0.6) continue;
+    const s = d + a * 0.8;
+    if (s < bs) { bs = s; best = n; }
+  }
+  if (!best) return null;
+  const n = best;
+  return { id: 'npc' + n.id, pos: V(n.chest.x, 0, n.chest.z), h: 0.9, obj: null, text: '들기', hold: 0, range: 99, score: bs, onDone: () => carryNpc(n) };
+}
+function carryNpc(n) {
+  if (P.held || P.carry || !n.pickUp()) return;
+  n._home = n.group.parent;
+  P.char.hold(n.group, { both: true });
+  n.group.position.set(0.62 * n.sc, -0.12, 0.1); n.group.rotation.set(0, PI / 2, 0);
+  P.carry = n.group; P.carryKind = 'person'; P.carryNpc = n;
+  P.char.playOnce('take');
+  sfx('pickup', { vol: 0.6, pitch: 0.7 }); sfx('bonk', { vol: 0.35, pitch: 0.8 });
+  count('carry'); emit('carry');
+  n.say(pickOne(['…(축)', '…zzZ', '…으음']), 1.6, G.rtime);
+}
+function releaseNpc(throwIt) {
+  const n = P.carryNpc; if (!n) return;
+  P.carryNpc = null; P.carry = null; P.carryKind = null;
+  if (n.group.parent) n.group.parent.remove(n.group);
+  n.group.position.set(0, 0, 0); n.group.rotation.set(0, n.yaw, 0);
+  (n._home || (G.S && G.S.F.group)).add(n.group);
+  const f = facing();
+  const x = P.pos.x + f.x * 0.45, z = P.pos.z + f.z * 0.45;
+  if (throwIt) {
+    n.throwLimp(x, P.y + 0.9, z, f.x * 7.5, 2.8, f.z * 7.5, P.yaw + PI / 2);
+    P.char.playOnce('smash'); sfx('whooshKick', { vol: 0.8 });
+    P.attackT = 0.4; count('throwPerson'); emit('throwPerson');
+  } else n.throwLimp(x, P.y + 0.5, z, f.x * 0.5, 0.5, f.z * 0.5, P.yaw + PI / 2);
+  keepNpcIn(n.pos, n.r);
 }
 function flipDesk(rec) {
   const S = G.S;
@@ -1689,11 +1884,13 @@ function special() {
     }
     // windows within reach shatter too
     for (const W of S.F.windows) for (const b of W.bays) if (b.intact && Math.hypot(b.x - c.x, b.z - c.z) < 4.5) toys.breakBay(S, W, b, true);
-    const ctx = npcCtx();
     for (const n of S.npcs) {
-      if (n.gone) continue;
+      if (n.gone || n.state === 'carried') continue;
       const d = n.pos.distanceTo(c);
-      if (d < 7 && n.knock(ctx, V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize(), 1.4 * (1 - d / 8))) emit('knock');
+      if (d >= 7) continue;
+      const dir = d > 0.05 ? V(n.pos.x - c.x, 0, n.pos.z - c.z).normalize() : V(Math.sin(P.yaw), 0, Math.cos(P.yaw));
+      // close: 멘탈 3 (a coworker goes 깨꼬닥), further out less
+      hitPerson(n, dir, 'special', { power: 1.6 * (1 - d / 8.5), dmg: d < 3.5 ? 3 : d < 5.5 ? 2 : 1 });
     }
     sfx('crash', { vol: 0.75 });
   });
@@ -1706,8 +1903,9 @@ function rampageCandidate() {
   if (tc && tc.id === 'ride-off') return tc;
   const fc = floorHook(G.S, 'candidate');
   if (fc) return fc;
-  if (P.held) return null;
+  if (P.held || P.carryNpc) return null;
   const S = G.S, f = facing();
+  const koc = koCandidate(f); // a KO'd body in reach: 들기 (scored against the toys / desks / pick-ups below)
   let best = null, bs = 1e9, desk = null, bsD = 1e9, pick = null, bsP = 1e9;
   for (const r of S.phys.records) {
     if (r.removed || r.held || r.fixed || r.riding || r.out) continue;
@@ -1726,6 +1924,7 @@ function rampageCandidate() {
     if (isDesk && s < bsD) { bsD = s; desk = r; }
     if (!isDesk && s < bsP) { bsP = s; pick = r; }
   }
+  if (koc && koc.score < bs && (!tc || koc.score < tc.score)) return koc;
   if (tc && tc.score < bs) return tc;
   if (!best) return null;
   // a flippable table in reach and a pickable thing too (on it or next to it, whichever has the better score):
@@ -1756,7 +1955,8 @@ function showBill() {
   ui.prompt(null); ui.timer(null); ui.combo(0); ui.elevator(null); ui.vignette(0); ui.subtitle(null, null);
   gfx.clearHighlight(); objective(null);
   releaseLock();
-  const items = [...G.items.values()].sort((a, b) => b.amount - a.amount);
+  const all = [...G.items.values()].sort((a, b) => b.amount - a.amount);
+  const items = all.filter((it) => !it.people), people = all.filter((it) => it.people); // people: own bill section
   const total = Math.round(G.money);
   const key = G.mode;
   const prev = save.best[key] || 0;
@@ -1776,7 +1976,7 @@ function showBill() {
   const relief = clamp(100 - G.stress, 0, 100);
   after(0.3, () => {
     ui.hud(false);
-    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, total, best: prev, isBest, relief, title: rank[1], comment: rank[2], meta });
+    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, people, total, best: prev, isBest, relief, title: rank[1], comment: rank[2], meta });
     audio.music('bill');
     after(0.5, () => sfx('stamp', { vol: 0.8 }));
     after(0.9, () => sfx(isBest ? 'newRecord' : 'fanfare', { vol: 0.7 }));
@@ -1785,7 +1985,7 @@ function showBill() {
   P.rage = false;
   setFace(total > 0 ? 'relief' : 'normal');
   P.char.setAnim(total > 0 ? 'cheer' : 'idle');
-  G.lastBill = { mode: G.mode, items: items.length, total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null };
+  G.lastBill = { mode: G.mode, items: items.length, people: people.map((it) => ({ name: it.name, count: it.count, amount: it.amount })), total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null };
 }
 function runTimersNow() { /* timers run on the next ticks; nothing to force */ }
 function endRampage() {
@@ -1937,7 +2137,7 @@ function routeTo(dest) {
 let _ctx = null;
 const _head = V();
 function npcCtx() {
-  if (!_ctx) _ctx = { sfx, pickExit, pickHide };
+  if (!_ctx) _ctx = { sfx, pickExit, pickHide, keepIn: keepNpcIn, groundAt: npcGround, onLand: npcLand, onKo: npcKo };
   const S = G.S;
   _ctx.nav = S ? S.nav : null;
   _ctx.lists = S ? S.lists : [];
@@ -2024,9 +2224,12 @@ function updatePlayer(dt) {
   // collisions: static + heavy props + people
   collideCircle(P.pos, P.r, S.lists, P.y);
   for (const n of S.npcs) {
-    if (n.gone || n.state === 'air' || n.state === 'down') continue;
+    if (n.gone || n.state === 'air' || n.state === 'carried') continue;
     const dx = P.pos.x - n.pos.x, dz = P.pos.z - n.pos.z, d = Math.hypot(dx, dz), m = P.r + n.r;
-    if (d < m && d > 1e-4) { P.pos.x += dx / d * (m - d); P.pos.z += dz / d * (m - d); }
+    if (d >= m || d <= 1e-4) continue;
+    // someone lying on the floor gets shoved along (feet end) instead of blocking you
+    if (n.lying || n.state === 'wake') { if (n.state === 'ko') { n.pos.x -= dx / d * (m - d) * 0.6; n.pos.z -= dz / d * (m - d) * 0.6; n.pushed = true; } continue; }
+    P.pos.x += dx / d * (m - d); P.pos.z += dz / d * (m - d);
   }
   collideCircle(P.pos, P.r, [S.F.rects], P.y);
   keepIn();
@@ -2110,7 +2313,7 @@ function updateInteract(dt) {
       if (G.tapArm && cand.onTap && G.holdT > 0 && G.holdT < cand.hold) { G.tapArm = false; G.holdT = 0; try { cand.onTap(); } catch (e) { report(e); } G.focus = null; }
       G.holdT = 0; G.tapArm = false;
     }
-  } else if (P.held && press && !G.needRelease) { G.needRelease = !(_bot && _bot.on); throwHeld(); }
+  } else if ((P.held || P.carryNpc) && press && !G.needRelease) { G.needRelease = !(_bot && _bot.on); if (P.carryNpc) releaseNpc(true); else throwHeld(); }
   if (_bot && _bot.on && _bot.interact && cand && cand.hold === 0) _bot.interact = false;
 }
 function fire(c) { try { c.onDone(); } catch (e) { report(e); } floorHook(G.S, 'onInteract', c); G.focus = null; }
@@ -2163,22 +2366,26 @@ function tick(dt) {
       const p = r.body.position;
       if (p.y > 2.0 || p.y < 0.05) continue;
       const reach = 0.42 + Math.min(0.6, Math.max(r.hx, r.hz));
+      if (r.pCool > t) continue;
       for (const n of S.npcs) {
-        if (n.gone || n.state === 'air' || n.state === 'down') continue;
+        if (!n.targetable || n.state === 'air') continue;
         const dx = n.pos.x - p.x, dz = n.pos.z - p.z;
         if (dx * dx + dz * dz > reach * reach) continue;
+        if (n.lying && p.y > 0.7) continue; // flies over someone lying on the floor
         const sp = Math.sqrt(v2);
         _d.set(v.x / sp, 0, v.z / sp);
-        if (n.knock(npcCtx(), _d, clamp(0.45 + sp * 0.07 + Math.min(r.mass, 60) * 0.008, 0.6, 1.45))) {
-          emit('knock');
-          sfx('hitSoft', { vol: 0.75 }); sfx('punch', { vol: 0.5, pitch: 0.85 });
-          fx.impact(_c.set(n.pos.x, 1.15, n.pos.z), 1.0, !isCalm());
-          shake(0.3);
+        // a flung desk / cabinet costs 3 멘탈, a chair or a box 2, small stuff 1
+        if (hitPerson(n, _d, 'thrown', { power: clamp(0.45 + sp * 0.07 + Math.min(r.mass, 60) * 0.008, 0.6, 1.45), dmg: r.mass >= 15 ? 3 : r.mass >= 3 ? 2 : 1 })) {
+          r.pCool = t + 0.3;
           v.x *= 0.55; v.z *= 0.55; // the hit takes some speed out of the thing
+          break;
         }
       }
     }
+    updateDomino();
   }
+  // carrying a KO'd body: dropped where you stand if a scene / the elevator takes over
+  if (P.carryNpc && (G.busy || !G.canDamage || !S.npcs.includes(P.carryNpc))) releaseNpc(false);
   // idle chatter (spec.lines) when you walk past, outside the rampage
   if (!G.rampage && G.mode !== 'title') {
     for (const n of S.npcs) {
@@ -2252,7 +2459,7 @@ function frameUI() {
   for (const n of S.npcs) {
     const b = n.bubble;
     if (!b || !b.text || b.until < G.rtime || n.gone || G.mode === 'title') { if (n._bubbleOn) { ui.bubble(n.id, null); n._bubbleOn = false; } if (b && b.until < G.rtime) n.bubble = null; continue; }
-    const hp = V(n.pos.x, n.y + (n.seated ? 1.45 : 1.95) * (n.char.group.scale.y || 1), n.pos.z);
+    const hp = n.bubbleAt(V()); // above the head, wherever it is (standing, seated, flat on the floor)
     const d = hp.distanceTo(camera.position);
     const s = d < 18 ? toScreen(hp) : null;
     if (s) { ui.bubble(n.id, { text: b.text, x: s.x, y: s.y }); n._bubbleOn = true; } else if (n._bubbleOn) { ui.bubble(n.id, null); n._bubbleOn = false; }
@@ -2538,12 +2745,13 @@ toys = createToys({
   G, P, fx, sfx, after, ui, TOUCH, report, vibrate,
   hitRec, destroyRec, addMoney, addItem, emit, alarmAt, npcCtx, syncRec, pickTarget,
   upright: recUpright,
-  knockNpc: (n, dir, power) => n.knock(npcCtx(), dir, power),
+  // toys hitting people (kind: ram / weapon / shout / blast / spray …, see PERSON_HIT) → true when it landed
+  knockNpc: (n, dir, power, kind = 'knock', o = {}) => hitPerson(n, dir, kind, Object.assign({ power }, o)) > 0,
   collide(pos, r) {
     const S = G.S;
     let hit = collideCircle(pos, r, S.lists, 0);
     for (const n of S.npcs) {
-      if (n.gone || n.state === 'air' || n.state === 'down') continue;
+      if (n.gone || n.state === 'air' || n.lying || n.state === 'wake') continue;
       const dx = pos.x - n.pos.x, dz = pos.z - n.pos.z, d = Math.hypot(dx, dz), m = r + n.r;
       if (d < m && d > 1e-4) { pos.x += dx / d * (m - d); pos.z += dz / d * (m - d); }
     }
@@ -2618,7 +2826,7 @@ if (DEBUG) {
         player: { x: +P.pos.x.toFixed(2), y: +P.y.toFixed(2), z: +P.pos.z.toFixed(2), yaw: +P.yaw.toFixed(2), anim: P.char.anim, face: P.char.face, seated: !!P.seated, carry: P.carryKind, held: P.held ? P.held.type : null },
         tasks: G.rampage ? G.taskShown.map((t) => t.text + (t.done ? ' ✓' : '')) : (G.storyTasks || []).map((t) => t.text + (t.done ? ' ✓' : '')),
         focus: G.focus ? G.focus.text : null, objective: G.obj ? { x: +G.obj.pos.x.toFixed(2), z: +G.obj.pos.z.toFixed(2), kind: G.obj.kind || (G.obj.cand ? 'interact' : 'goto'), dest: G.obj.dest || null } : null,
-        bodies: pc, npcs: S ? { total: S.npcs.length, gone: S.npcs.filter((n) => n.gone).length, panicked: S.npcs.filter((n) => n.panicked).length, knocked: S.npcs.reduce((a, n) => a + n.hitCount, 0) } : null,
+        bodies: pc, npcs: S ? { total: S.npcs.length, gone: S.npcs.filter((n) => n.gone).length, panicked: S.npcs.filter((n) => n.panicked).length, knocked: S.npcs.reduce((a, n) => a + n.hitCount, 0), ko: S.npcs.filter((n) => n.isKo).length, koTotal: S.npcs.reduce((a, n) => a + n.koCount, 0) } : null,
         items: [...G.items.values()].length, counts: G.counts, combo: G.combo, special: +G.special.toFixed(2),
         fps: G.fps, quality: gfx.level, post: gfx.usingPost, render: info(), errors: G.errors.length, rtime: +G.rtime.toFixed(2), bill: G.lastBill || null,
         floorsBuilt: Object.fromEntries(Object.entries(G.floors).map(([k, s]) => [k, s.buildMs])),
@@ -2661,6 +2869,27 @@ if (DEBUG) {
       return o;
     },
     fxStats() { return fx.stats(); },
+    // ---- people (KO tests): npc(i | id | role) → pos / state / 멘탈; spawn extras; stand in front of one
+    npc(q) {
+      const L = G.S ? G.S.npcs : [];
+      const n = typeof q === 'number' ? L[q] : L.find((x) => x.id === q) || L.find((x) => x.role === q) || L.find((x) => x.spec.name === q);
+      if (!n) return null;
+      return { i: L.indexOf(n), id: n.id, role: n.role, name: n.spec.name || null, x: +n.pos.x.toFixed(2), y: +n.y.toFixed(2), z: +n.pos.z.toFixed(2), yaw: +n.yaw.toFixed(2), state: n.state, mental: n.mental, mentalMax: n.mentalMax, ko: n.isKo, koCount: n.koCount, koT: +n.koT.toFixed(2), koLen: +n.koLen.toFixed(2), anim: n.char.anim, face: n.char.face, seated: !!n.seated, gone: n.gone, visible: n.group.visible, inScene: !!n.group.parent, stars: n.starsOn, ghost: n.ghostOn, bubble: n.bubble && n.bubble.until > G.rtime ? n.bubble.text : null, head: n.head.toArray().map((v) => +v.toFixed(2)), rotX: +n.group.rotation.x.toFixed(2) };
+    },
+    npcs() { return G.S ? G.S.npcs.map((n, i) => __ppg.npc(i)) : []; },
+    spawnNpc(x, z, o = {}) {
+      const n = new NPC(Object.assign({ preset: 'workerM2', x, z, rotY: 0, anim: 'idle', role: 'worker', id: 'extra' + G.S.npcs.length, variantSeed: 500 + G.S.npcs.length }, o));
+      G.S.npcs.push(n); G.S.F.group.add(n.group); return G.S.npcs.length - 1;
+    },
+    faceNpc(q, dist = 1.0) {
+      const L = G.S.npcs, n = typeof q === 'number' ? L[q] : L.find((x) => x.id === q) || L.find((x) => x.role === q);
+      if (!n) return null;
+      let dx = Math.sin(n.yaw), dz = Math.cos(n.yaw); // in front of them
+      P.pos.set(n.pos.x + dx * dist, 0, n.pos.z + dz * dist); P.vel.set(0, 0, 0); P.y = 0;
+      P.yaw = Math.atan2(-dx, -dz); placePlayer(); snapCamera(); CAM.yaw = P.yaw; updateCamera(0, true);
+      return { x: +P.pos.x.toFixed(2), z: +P.pos.z.toFixed(2) };
+    },
+    koStats() { return fx.koStats(); },
     stressCap: () => storyStressCap(),
     stressLog: () => (G.stressLog || []).slice(),
     // drop any prop on the floor at (x, z) (tests: a chair in an empty aisle)

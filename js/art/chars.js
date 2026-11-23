@@ -100,6 +100,17 @@ function sweat(x, px, py, s = 1) {
   x.quadraticCurveTo(px - 11 * s, py + 2 * s, px, py - 16 * s); x.fill(); x.stroke();
   x.fillStyle = '#fff'; x.beginPath(); x.arc(px - 3 * s, py, 2.5 * s, 0, 7); x.fill();
 }
+// cartoon swirl eye (no pupil): dir = turn direction, rMax = outer radius
+function spiral(x, ex, ey, dir, rMax = 22, w = 5) {
+  x.strokeStyle = INK; x.lineWidth = w;
+  x.beginPath();
+  for (let a = 0; a <= 4.4 * Math.PI; a += 0.18) {
+    const r = 1.5 + (a / (4.4 * Math.PI)) * rMax;
+    const px = ex + Math.cos(a * dir) * r, py = ey + Math.sin(a * dir) * r * 1.12;
+    if (a === 0) x.moveTo(px, py); else x.lineTo(px, py);
+  }
+  x.stroke();
+}
 function gloom(x) {
   x.strokeStyle = 'rgba(70,100,200,0.45)'; x.lineWidth = 4;
   for (let i = -3; i <= 3; i++) { x.beginPath(); x.moveTo(i * 22, 30); x.lineTo(i * 22, 62 + (i & 1) * 10); x.stroke(); }
@@ -216,14 +227,37 @@ function drawFace(name, blink, frame) {
       x.fillStyle = '#f27b7b'; x.beginPath(); x.ellipse(0, 218, 9, 7, 0, 0, 7); x.fill();
       sweat(x, 130, 100);
       break;
+    case 'ko': {
+      // 깨꼬닥: big spiral eyes, brows up, slack "o" mouth with the tongue lolling out to one side (cartoon, no injury)
+      blush(x, 0.3);
+      brow(x, L, 82, 88, 6); brow(x, R, 82, 88, 6);
+      for (const e of [L, R]) spiral(x, e, Y, e < 0 ? 1 : -1, 25, 6);
+      x.fillStyle = '#6a2a22';
+      x.beginPath(); x.ellipse(-4, 198, 20, 11, -0.12, 0, 7); x.fill();
+      x.fillStyle = '#f27b8e'; x.strokeStyle = '#b24a5c'; x.lineWidth = 3;
+      x.beginPath(); x.moveTo(2, 200); x.lineTo(24, 200); x.quadraticCurveTo(30, 236, 16, 240); x.quadraticCurveTo(0, 240, 2, 200); x.fill(); x.stroke();
+      x.beginPath(); x.moveTo(13, 206); x.lineTo(14, 226); x.stroke();
+      break;
+    }
+    case 'dizzy':
+      // 띵~: small spirals, wavy mouth, one sweat drop
+      blush(x, 0.22);
+      brow(x, L, 92, 84); brow(x, R, 84, 92);
+      for (const e of [L, R]) spiral(x, e, Y + 2, e < 0 ? -1 : 1, 18, 5);
+      x.strokeStyle = '#7a3527'; x.lineWidth = 5;
+      x.beginPath(); x.moveTo(-26, 200);
+      for (let i = -26; i <= 26; i += 2) x.lineTo(i, 200 + Math.sin(i * 0.24) * 5);
+      x.stroke();
+      sweat(x, 128, 92, 0.9);
+      break;
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
   return t;
 }
-export const FACES = ['normal', 'smile', 'endure', 'rage', 'relief', 'scared', 'smug', 'sleepy', 'shock'];
-const NO_BLINK = { smile: 1, relief: 1, sleepy: 1 };
+export const FACES = ['normal', 'smile', 'endure', 'rage', 'relief', 'scared', 'smug', 'sleepy', 'shock', 'ko', 'dizzy'];
+const NO_BLINK = { smile: 1, relief: 1, sleepy: 1, ko: 1, dizzy: 1 };
 function faceTex(name, blink, frame) {
   const k = name + (blink ? 'B' : '') + (frame ? 'F' : '');
   let t = FACE_TEX.get(k);
@@ -245,7 +279,7 @@ export const PRESETS = {
   glasses: { gender: 'm', suit: '#6b6f7a', pants: '#4b4e57', shirt: '#f3f3ef', tie: '#3d6b4f', hair: '#231d1b', hairStyle: 'side', skin: '#f0c4a2', glasses: true, lanyard: true, face: 'normal' },
 };
 
-export const ANIMS = ['idle', 'walk', 'run', 'sit', 'type', 'carry', 'phone', 'armsCrossed', 'lookUp', 'stretch', 'talk', 'offer', 'scared', 'flee', 'cheer', 'rageIdle', 'knocked', 'fall'];
+export const ANIMS = ['idle', 'walk', 'run', 'sit', 'type', 'carry', 'phone', 'armsCrossed', 'lookUp', 'stretch', 'talk', 'offer', 'scared', 'flee', 'cheer', 'rageIdle', 'knocked', 'fall', 'ko', 'koFace', 'dizzy', 'groggy', 'stagger', 'coverEars', 'peek'];
 export const ONESHOTS = ['punch', 'punchL', 'kick', 'smash', 'flip', 'pull', 'take', 'jump', 'land', 'special'];
 
 // ---------------------------------------------------------------- pose channels
@@ -383,10 +417,10 @@ const POSE = {
   },
   knocked(o, t) {
     zero(o);
-    o[BRX] = -PI / 2; o[BY] = 0.155;
+    o[BRX] = -PI / 2; o[BY] = 0.165;
     o[LHX] = o[RHX] = -0.35; o[LKX] = o[RKX] = 0.55; o[LHZ] = o[RHZ] = 0.1;
     o[LSZ] = o[RSZ] = 1.3; o[LEX] = o[REX] = -0.35; o[LSX] = o[RSX] = -0.2;
-    o[HZ] = sin(t * 3) * 0.25; o[HX] = -0.15;
+    o[HZ] = sin(t * 3) * 0.25; o[HX] = 0.42; // chin tucked: keeps the big head off the floor
   },
   fall(o, t) {
     zero(o);
@@ -394,6 +428,65 @@ const POSE = {
     o[LSX] = -2.6 + s * 0.5; o[RSX] = -2.6 - s * 0.5; o[LSZ] = o[RSZ] = 0.75; o[LEX] = o[REX] = -0.3;
     o[LHX] = -0.6 + sin(t * 12) * 0.5; o[RHX] = -0.6 - sin(t * 12) * 0.5; o[LKX] = o[RKX] = 0.9;
     o[SPX] = -0.12; o[HX] = -0.2;
+  },
+  // ---- 깨꼬닥 (KO) set: starfish on the back, one leg twitching now and then; head lolls, chest breathes
+  ko(o, t) {
+    zero(o);
+    o[BRX] = -PI / 2; o[BY] = 0.165;
+    o[LSZ] = o[RSZ] = 1.7; o[LSX] = o[RSX] = -0.12; o[LEX] = o[REX] = -0.3; o[LSY] = o[RSY] = 0.2;
+    o[LHZ] = o[RHZ] = 0.4; o[LKX] = 0.1;
+    const u = t % 1.9, k = u < 0.4 ? sin((u / 0.4) * PI) : 0;
+    o[RKX] = 0.1 + k * 1.0; o[RHX] = -k * 0.6; o[RFX] = 0.2 + k * 0.6; o[LFX] = 0.25;
+    o[HZ] = 0.34 + sin(t * 1.3) * 0.05; o[HX] = 0.45; o[SQ] = 1 + sin(t * 2.2) * 0.015;
+  },
+  // face-plant variant (hit from behind): flat on the front, arms out past the head, a foot twitching
+  koFace(o, t) {
+    zero(o);
+    o[BRX] = PI / 2; o[BY] = 0.165;
+    o[LSX] = o[RSX] = -2.75; o[LSZ] = o[RSZ] = 0.45; o[LEX] = o[REX] = -0.15;
+    o[LHZ] = o[RHZ] = 0.22; o[LKX] = 0.15;
+    const u = t % 1.7, k = u < 0.35 ? sin((u / 0.35) * PI) : 0;
+    o[RKX] = 0.15 + k * 1.3; o[LFX] = o[RFX] = -0.4;
+    o[HX] = -0.5; o[HY] = 0.45; o[SQ] = 1 + sin(t * 2.2) * 0.012;
+  },
+  // 띵~ (one hit from KO): swaying on wobbly knees, head circling
+  dizzy(o, t) {
+    pIdle(o, t);
+    const w = sin(t * 3.4), c = cos(t * 3.4);
+    o[BRZ] = w * 0.11; o[BRX] = c * 0.05; o[HZ] = -w * 0.28; o[HX] = 0.08 + c * 0.14;
+    o[LSZ] = o[RSZ] = 0.55 + w * 0.2; o[LEX] = o[REX] = -0.55; o[LHZ] = o[RHZ] = 0.1;
+    o[LKX] = o[RKX] = 0.22 + abs(w) * 0.15; o[LHX] = o[RHX] = -0.1; o[BY] = -0.025;
+    footFlat(o);
+  },
+  // waking up: sitting on the floor, shaking the head, then a dazed look round
+  groggy(o, t) {
+    zero(o);
+    o[BY] = -(HIP_Y - 0.085);
+    o[LHX] = o[RHX] = -1.45; o[LKX] = o[RKX] = 0.28; o[LHZ] = o[RHZ] = 0.16; o[LFX] = o[RFX] = -0.25;
+    o[SPX] = -0.18 + sin(t * 1.6) * 0.03; o[LSX] = o[RSX] = 0.6; o[LSZ] = o[RSZ] = 0.32; o[LEX] = o[REX] = -0.12;
+    const sh = t < 1.3 ? sin(t * 17) * 0.5 * (1 - t / 1.3) : 0;
+    o[HY] = sh + (t > 1.3 ? sin(t * 1.1) * 0.35 : 0); o[HZ] = sin(t * 2.1) * 0.12; o[HX] = 0.05;
+  },
+  stagger(o, t, ph) {
+    pWalk(o, t, ph, false);
+    const w = sin(t * 2.6);
+    o[BRZ] += w * 0.13; o[HZ] = -w * 0.22; o[HX] = 0.12; o[LSZ] = o[RSZ] = 0.45 + w * 0.15; o[SPX] = 0.12;
+  },
+  // megaphone blast: hands over the ears, hunched
+  coverEars(o, t) {
+    zero(o);
+    const tr = sin(t * 30);
+    o[LSX] = o[RSX] = -0.45; o[LSZ] = o[RSZ] = 1.25; o[LSY] = o[RSY] = 0.55; o[LEX] = o[REX] = -2.35;
+    o[SPX] = 0.3; o[HX] = 0.22 + tr * 0.02; o[BY] = -0.04;
+    o[LHX] = o[RHX] = -0.2; o[LKX] = o[RKX] = 0.4; o[LHZ] = o[RHZ] = 0.1; o[BRZ] = tr * 0.02;
+    footFlat(o);
+  },
+  // the hiding boss peeks round the pillar
+  peek(o, t) {
+    pIdle(o, t);
+    const k = 0.5 + 0.5 * sin(t * 2.2);
+    o[BRZ] = 0.32 * k; o[BZ] = 0.0; o[SPZ] = 0.15 * k; o[HZ] = -0.35 * k; o[HY] = 0.25 * k;
+    o[RSX] = -1.0; o[RSZ] = 0.55; o[REX] = -1.2; o[LSZ] = 0.4 * k; o[LHZ] = 0.15 * k;
   },
 };
 
@@ -693,10 +786,13 @@ export function makeCharacter(opts = {}) {
     const vee = mesh(cyl(0.085, 0.085, 0.03, 3), shirt, spine, 0, 0.36, 0.118);
     vee.rotation.x = PI / 2 - 0.35;                                                 // shirt V inside the jacket
   }
+  let tieB = null;
   if (o.tie) {
     const tm = mat(o.tie, 0.55);
     mesh(rbox(0.04, 0.035, 0.03), tm, spine, 0, 0.385, 0.128);
-    const tb = mesh(rbox(0.046, 0.2, 0.016), tm, spine, 0, 0.27, 0.158);
+    // the blade hangs from its own joint (flops about when knocked out)
+    tieB = new THREE.Group(); tieB.position.set(0, 0.375, 0.145); spine.add(tieB);
+    const tb = mesh(rbox(0.046, 0.2, 0.016), tm, tieB, 0, -0.105, 0.013);
     tb.rotation.x = -0.15;
   }
   if (o.apron) {
@@ -754,13 +850,19 @@ export function makeCharacter(opts = {}) {
   for (const s of [1, -1]) mesh(sph(7, 5), skin, skull, s * 0.99, -0.06, 0.02, 0.15, 0.24, 0.12);
   mesh(sph(6, 4), skinD, skull, 0, -0.2, 0.97, 0.1, 0.08, 0.07);
   buildHair(skull, o.hairStyle || 'short', o.hair, o.hair2);
+  // glasses + a cartoon bump each on their own joint: scaled to ~0 to hide (glasses knocked off / no bump yet)
+  let glassesB = null;
   if (o.glasses) {
     const gm = mat('#2a2220', 0.4);
+    glassesB = new THREE.Group(); skull.add(glassesB);
     const ring = geo('glRing', () => new THREE.TorusGeometry(0.2, 0.03, 4, 14));
-    for (const s of [1, -1]) mesh(ring, gm, skull, s * 0.34, -0.06, 1.0, 1, 0.9, 1);
-    const br = mesh(cyl(0.022, 0.022, 0.26, 5), gm, skull, 0, -0.03, 1.04); br.rotation.z = PI / 2;
-    for (const s of [1, -1]) { const tp = mesh(cyl(0.02, 0.02, 0.7, 5), gm, skull, s * 0.58, -0.04, 0.65); tp.rotation.x = PI / 2; tp.rotation.y = s * 0.55; }
+    for (const s of [1, -1]) mesh(ring, gm, glassesB, s * 0.34, -0.06, 1.0, 1, 0.9, 1);
+    const br = mesh(cyl(0.022, 0.022, 0.26, 5), gm, glassesB, 0, -0.03, 1.04); br.rotation.z = PI / 2;
+    for (const s of [1, -1]) { const tp = mesh(cyl(0.02, 0.02, 0.7, 5), gm, glassesB, s * 0.58, -0.04, 0.65); tp.rotation.x = PI / 2; tp.rotation.y = s * 0.55; }
   }
+  const bumpB = new THREE.Group(); bumpB.position.set(0.22, 1.02, 0.28); skull.add(bumpB);
+  mesh(sph(10, 7), mat('#' + new THREE.Color(o.skin).lerp(new THREE.Color('#ff8c8c'), 0.32).getHexString(), 0.5), bumpB, 0, 0, 0, 0.36, 0.33, 0.36);
+  mesh(sph(6, 4), mat('#ffffff', 0.3), bumpB, -0.1, 0.17, 0.12, 0.09, 0.06, 0.07); // shine
 
   // ---- all body parts → ONE rigidly skinned mesh (each joint group is a bone, colour + roughness per vertex).
   // Same look as the per-part meshes, but 1 draw call (+1 shadow) instead of ~25 (+~24).
@@ -768,6 +870,9 @@ export function makeCharacter(opts = {}) {
   const skip = new Set([faceMesh, phoneM, scr]);
   const skinned = skinCharacter(group, sig, skip);
   group.traverse((m) => { if (m.isMesh && m !== faceMesh && m !== scr) { m.castShadow = true; m.receiveShadow = true; } });
+  const HIDE = 1e-3;
+  bumpB.scale.setScalar(HIDE);
+  let tieFlop = 0;
 
   // ---- anim state (preallocated)
   const P0 = new Float32Array(NCH), P1 = new Float32Array(NCH), PS = new Float32Array(NCH);
@@ -817,6 +922,11 @@ export function makeCharacter(opts = {}) {
       obj.rotation.set(0, 0, 0);
     },
     lookAt(v) { st.look = v ? (st.look || new THREE.Vector3()).copy(v) : null; },
+    // KO props: glasses on/off the face, bump size 0..1 (+ overshoot), tie flopping 0..1
+    get hasGlasses() { return !!glassesB; },
+    setGlasses(on) { if (glassesB) glassesB.scale.setScalar(on ? 1 : HIDE); },
+    setBump(k) { bumpB.scale.setScalar(k > 0.01 ? k : HIDE); },
+    setTieFlop(k) { tieFlop = k; if (tieB && k <= 0) tieB.rotation.set(0, 0, 0); },
     update(dt, speed = 0) {
       if (dt > 0.1) dt = 0.1;
       st.tA += dt; st.tP += dt;
@@ -881,6 +991,7 @@ export function makeCharacter(opts = {}) {
       legs[0].rotation.set(p[LHX], 0, p[LHZ]); legs[1].rotation.x = p[LKX]; legs[2].rotation.x = p[LFX];
       legs[3].rotation.set(p[RHX], 0, -p[RHZ]); legs[4].rotation.x = p[RKX]; legs[5].rotation.x = p[RFX];
       phoneM.visible = st.anim === 'phone' && handR.children.length === 1 && st.blend > 0.5;
+      if (tieB && tieFlop > 0) tieB.rotation.set(-tieFlop * (0.9 + sin(st.tA * 2.3) * 0.15), 0, tieFlop * (1.1 + sin(st.tA * 3.1) * 0.3));
     },
     dispose() {
       if (group.parent) group.parent.remove(group);

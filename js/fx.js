@@ -1,8 +1,10 @@
 // 회사 뿌개기 — effects: debris cubes, sparks, fluttering papers, tossed bits, shockwave ring, objective marker.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeProp } from './art/props.js';
 
 const rnd = (a, b) => a + Math.random() * (b - a);
+const _m0 = new THREE.Matrix4().makeScale(0, 0, 0);
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _v = new THREE.Vector3(), _e = new THREE.Euler(), _c = new THREE.Color();
 
 export function createFx(scene) {
@@ -125,6 +127,42 @@ export function createFx(scene) {
   ring.rotation.x = -Math.PI / 2; ring.visible = false; root.add(ring);
   let ringT = -1;
 
+  // ---------------- 깨꼬닥 (KO): stars orbiting a dizzy head + a little soul puff floating over the body.
+  // Owners (NPCs) expose `head` / `chest` (Vector3, world) and `starsOn` / `ghostOn` flags; rings and ghosts follow
+  // them, fade out when the flag drops and free their slot. Fixed pools, hidden (no draw call) while unused.
+  const STAR_N = 5, RING_N = 16, GHOST_N = 8;
+  const starShape = new THREE.Shape();
+  for (let i = 0; i < 10; i++) { const a = (i / 10) * Math.PI * 2 + Math.PI / 2, r = i % 2 ? 0.46 : 1; if (i) starShape.lineTo(Math.cos(a) * r, Math.sin(a) * r); else starShape.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+  const starGeo = new THREE.ExtrudeGeometry(starShape, { depth: 0.32, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.08, bevelSegments: 1 });
+  starGeo.center();
+  const stMesh = new THREE.InstancedMesh(starGeo, new THREE.MeshStandardMaterial({ color: '#ffd83a', emissive: '#ffb300', emissiveIntensity: 0.6, roughness: 0.35 }), RING_N * STAR_N);
+  stMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); stMesh.frustumCulled = false; stMesh.castShadow = false; stMesh.visible = false;
+  for (let i = 0; i < RING_N * STAR_N; i++) stMesh.setMatrixAt(i, _m);
+  root.add(stMesh);
+  const RINGS = [];
+  for (let i = 0; i < RING_N; i++) RINGS.push({ owner: null, k: 0, ph: 0 });
+  // ghost: round head + wavy tail + two dot eyes + little arms (vertex colours, one instanced mesh)
+  const ghostGeo = (() => {
+    const col = (g, c) => { const n = g.attributes.position.count, a = new Float32Array(n * 3); _c.set(c); for (let i = 0; i < n; i++) { a[i * 3] = _c.r; a[i * 3 + 1] = _c.g; a[i * 3 + 2] = _c.b; } g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g; };
+    const clean = (g) => { g = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k); return g; };
+    const head = clean(new THREE.SphereGeometry(1, 14, 10));
+    const tail = clean(new THREE.ConeGeometry(0.98, 1.9, 14, 1, true)); tail.rotateX(Math.PI); tail.translate(0, -0.95, 0);
+    tail.rotateZ(0.32); // teardrop tail swinging to one side
+    const parts = [col(head, '#ffffff'), col(tail, '#f2f6ff')];
+    for (const s of [-1, 1]) {
+      const e = clean(new THREE.SphereGeometry(0.17, 8, 6)); e.scale(1, 1.35, 0.6); e.translate(s * 0.36, 0.12, 0.9); parts.push(col(e, '#2a1b14'));
+      const a = clean(new THREE.SphereGeometry(0.3, 8, 6)); a.scale(1, 0.6, 0.7); a.translate(s * 1.05, -0.35, 0.1); parts.push(col(a, '#ffffff'));
+    }
+    const m = mergeGeometries(parts); for (const p of parts) p.dispose(); return m;
+  })();
+  const ghMesh = new THREE.InstancedMesh(ghostGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, transparent: true, opacity: 0.88, depthWrite: false }), GHOST_N);
+  ghMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); ghMesh.frustumCulled = false; ghMesh.castShadow = false; ghMesh.visible = false; ghMesh.renderOrder = 5;
+  for (let i = 0; i < GHOST_N; i++) ghMesh.setMatrixAt(i, _m);
+  root.add(ghMesh);
+  const GHOSTS = [];
+  for (let i = 0; i < GHOST_N; i++) GHOSTS.push({ owner: null, t: 0, h: 0, k: 0, back: 0 });
+  const _eye = new THREE.Vector3();
+
   // ---------------- objective marker (floor ring + floating chevron)
   const mk = new THREE.Group(); mk.visible = false; root.add(mk);
   const mkMat = new THREE.MeshBasicMaterial({ color: '#ffd23f', transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false });
@@ -211,6 +249,29 @@ export function createFx(scene) {
       group.position.copy(pos); parent.add(group);
       tossed.push({ g: group, v: vel.clone(), w: new THREE.Vector3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(spin), t: 0, rest: false });
     },
+    // KO stars round owner.head while owner.starsOn (owner.starSize scales them); one ring per owner
+    koStars(owner) {
+      let free = null;
+      for (const R of RINGS) { if (R.owner === owner) return R; if (!free && !R.owner) free = R; }
+      if (!free) return null;
+      free.owner = owner; free.k = 0; free.ph = rnd(0, 6);
+      return free;
+    },
+    // soul puff rising from owner.chest while owner.ghostOn; sucked back in when the flag drops
+    ghost(owner) {
+      let free = null;
+      for (const g of GHOSTS) { if (g.owner === owner) { g.back = 0; return g; } if (!free && !g.owner) free = g; }
+      if (!free) return null;
+      free.owner = owner; free.t = 0; free.h = 0; free.k = 0; free.back = 0;
+      return free;
+    },
+    untoss(group) {
+      const i = tossed.findIndex((T) => T.g === group);
+      if (i >= 0) tossed.splice(i, 1);
+      if (group.parent) group.parent.remove(group);
+    },
+    koStats() { let r = 0, g = 0; for (const R of RINGS) if (R.owner) r++; for (const G of GHOSTS) if (G.owner) g++; return { rings: r, ghosts: g, starsVisible: stMesh.visible, ghostsVisible: ghMesh.visible }; },
+    camera: null, // set by main (ghosts turn to face it)
     puff(pos, vel, size = 0.18, life = 0.9) {
       const P = PF[fIdx]; fIdx = (fIdx + 1) % FN;
       P.on = true; P.life = 0; P.max = life * rnd(0.8, 1.2); P.s = size * rnd(0.7, 1.3);
@@ -261,6 +322,11 @@ export function createFx(scene) {
       for (let i = 0; i < WN; i++) wMesh.setMatrixAt(i, _m);
       dMesh.instanceMatrix.needsUpdate = true; sMesh.instanceMatrix.needsUpdate = true; fMesh.instanceMatrix.needsUpdate = true; wMesh.instanceMatrix.needsUpdate = true;
       ring.visible = false; mk.visible = false;
+      for (const R of RINGS) R.owner = null;
+      for (const g of GHOSTS) g.owner = null;
+      for (let i = 0; i < RING_N * STAR_N; i++) stMesh.setMatrixAt(i, _m);
+      for (let i = 0; i < GHOST_N; i++) ghMesh.setMatrixAt(i, _m);
+      stMesh.instanceMatrix.needsUpdate = true; ghMesh.instanceMatrix.needsUpdate = true; stMesh.visible = false; ghMesh.visible = false;
     },
     papersLanded() { let n = 0; for (const P of papers) if (P.on && P.landed) n++; return n; },
     active() { return dActive; },
@@ -400,6 +466,52 @@ export function createFx(scene) {
           T.v.y *= -0.35; T.v.x *= 0.5; T.v.z *= 0.5; T.w.multiplyScalar(0.5);
         }
       }
+      // KO stars
+      let anySt = false;
+      for (let r = 0; r < RING_N; r++) {
+        const R = RINGS[r];
+        if (!R.owner && !stMesh.visible) continue;
+        const base = r * STAR_N;
+        if (!R.owner) { for (let j = 0; j < STAR_N; j++) stMesh.setMatrixAt(base + j, _m0); continue; }
+        const o = R.owner, on = !!o.starsOn && !o.gone;
+        R.k += (on ? 1 : -1) * dt * (on ? 2.6 : 1.6);
+        if (R.k <= 0 && !on) { R.k = 0; R.owner = null; for (let j = 0; j < STAR_N; j++) stMesh.setMatrixAt(base + j, _m0); continue; }
+        if (R.k > 1) R.k = 1;
+        anySt = true;
+        R.ph += dt * 3.4;
+        const hp = o.head, sz = (o.starSize || 1), rad = 0.3 * sz * (0.6 + 0.4 * R.k), pop = R.k < 1 ? R.k * (1 + 0.35 * Math.sin(R.k * Math.PI)) : 1;
+        for (let j = 0; j < STAR_N; j++) {
+          const a = R.ph + (j / STAR_N) * Math.PI * 2;
+          _p.set(hp.x + Math.cos(a) * rad, hp.y + 0.38 + Math.sin(a * 2 + j) * 0.035, hp.z + Math.sin(a) * rad);
+          _q.setFromEuler(_e.set(0.25, -a + t * 2, Math.sin(t * 3 + j) * 0.3));
+          const s = 0.085 * sz * pop * (1 + 0.15 * Math.sin(t * 7 + j * 1.7));
+          _s.set(s, s, s);
+          _m.compose(_p, _q, _s); stMesh.setMatrixAt(base + j, _m);
+        }
+      }
+      if (anySt || stMesh.visible) stMesh.instanceMatrix.needsUpdate = true;
+      stMesh.visible = anySt;
+      // KO ghosts
+      let anyG = false;
+      for (let i = 0; i < GHOST_N; i++) {
+        const g = GHOSTS[i];
+        if (!g.owner) { if (ghMesh.visible) ghMesh.setMatrixAt(i, _m0); continue; }
+        const o = g.owner, on = !!o.ghostOn && !o.gone;
+        g.t += dt;
+        if (on) { g.k = Math.min(1, g.k + dt * 2.2); g.h = Math.min(0.85, g.h + dt * (0.95 - g.h) * 1.8 + dt * 0.05); }
+        else { g.back += dt; g.h = Math.max(0, g.h - dt * 2.6); g.k = Math.max(0, g.k - dt * 2.4); if (g.back > 0.5 || g.k <= 0) { g.owner = null; ghMesh.setMatrixAt(i, _m0); continue; } }
+        anyG = true;
+        const c = o.chest, sw = Math.sin(g.t * 1.4) * 0.09 * g.k;
+        _p.set(c.x + sw, c.y + 0.15 + g.h + Math.sin(g.t * 2.2) * 0.05 * g.k, c.z);
+        let yaw = 0;
+        if (fx.camera) { _eye.copy(fx.camera.position); yaw = Math.atan2(_eye.x - _p.x, _eye.z - _p.z); }
+        _q.setFromEuler(_e.set(0, yaw, Math.sin(g.t * 3.1) * 0.28 * g.k));
+        const s = 0.14 * (0.25 + 0.75 * g.k) * (o.starSize || 1);
+        _s.set(s, s * (on ? 1 : 1 + (1 - g.k) * 0.8), s);
+        _m.compose(_p, _q, _s); ghMesh.setMatrixAt(i, _m);
+      }
+      if (anyG || ghMesh.visible) ghMesh.instanceMatrix.needsUpdate = true;
+      ghMesh.visible = anyG;
       // ring
       if (ringT >= 0) {
         ringT += dt;
