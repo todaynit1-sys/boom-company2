@@ -490,7 +490,8 @@ function hudRampage(label = '피해 총액') {
   ui.money(G.money, label); ui.special(G.special);
 }
 function setStress(v, pulse = true) {
-  const nv = clamp(v, 0, 100);
+  let nv = clamp(v, 0, 100);
+  if (G.mode === 'story' && !G.rampage && STORY[G.scene]) nv = Math.max(G.stress, Math.min(nv, storyStressCap()));
   const up = nv > G.stress + 0.5;
   G.stress = nv;
   ui.stress(nv, { pulse: pulse && up });
@@ -738,7 +739,18 @@ for (const f of FLOORS) {
     skip() { G.run = null; sceneNext(); },
   };
 }
-STORY_ORDER = Object.keys(STORY).sort((a, b) => clockHours(STORY[a].info.time) - clockHours(STORY[b].info.time)).concat(['rampage', 'bill']);
+// 길게 = every situation by the clock (8 with all floors), 짧게 (default) = copier, coffee, 퇴근 5분 전
+const STORY_LONG = Object.keys(STORY).sort((a, b) => clockHours(STORY[a].info.time) - clockHours(STORY[b].info.time)).concat(['rampage', 'bill']);
+const STORY_SHORT = ['copier', 'coffee', 'sunset', 'rampage', 'bill'];
+STORY_ORDER = STORY_SHORT;
+// story stress: never goes down between situations and the k-th of N situations tops out at
+// 100 − 58·(N−1−k)/(N−1) (short: 42 / 71 / 100, long: 42 … 92 / 100), so only the last one reaches 100
+function storyStressCap() {
+  const list = STORY_ORDER.filter((id) => STORY[id]);
+  const i = list.indexOf(G.scene), N = list.length;
+  if (i < 0 || N < 2) return 100;
+  return Math.round(100 - 58 * (N - 1 - i) / (N - 1));
+}
 
 function anchorPos(S, a) {
   if (!a) return null;
@@ -839,10 +851,12 @@ function stepDone(s, R, dt) {
 }
 function phase(p) { G.phase = p; G.phaseT = 0; }
 function sceneNext() {
-  const i = STORY_ORDER.indexOf(G.scene);
-  gotoScene(STORY_ORDER[Math.min(STORY_ORDER.length - 1, i + 1)]);
+  let order = STORY_ORDER, i = order.indexOf(G.scene);
+  if (i < 0) { order = STORY_LONG; i = order.indexOf(G.scene); } // (a situation reached with __ppg.goto)
+  gotoScene(order[Math.min(order.length - 1, i + 1)]);
 }
 function gotoScene(id) {
+  if (G.mode === 'story') (G.stressLog || (G.stressLog = [])).push([G.scene, Math.round(G.stress), +G.rtime.toFixed(1)]);
   G.gen++; G.timers.length = 0;
   ui.subtitle(null, null); ui.elevator(null); G.evPanel = null;
   if (STORY[id]) {
@@ -1239,7 +1253,7 @@ function alarmAt(pos, rad = 9) {
   const ctx = npcCtx();
   for (const n of G.S.npcs) if (!n.gone && n.pos.distanceTo(pos) < rad) n.alarm(ctx, pos);
 }
-const _c = V(), _d = V(), _cp = V();
+const _c = V(), _d = V(), _cp = V(), _d2 = V();
 function recPos(r, out = V()) { const p = r.body.position; return out.set(p.x, p.y, p.z); }
 function hitRec(rec, dmg, dir, power, opts = {}) {
   const S = G.S, b = rec.body;
@@ -1299,12 +1313,20 @@ function hitRec(rec, dmg, dir, power, opts = {}) {
 // leaves the desk, a printer only shifts), plus a hop and a forward tumble
 function launch(rec, dir, power) {
   const S = G.S, b = rec.body, m = clamp(rec.mass, 0.15, 160), light = m < 20;
-  const vh = clamp(power * 4.6 / Math.pow(Math.max(0.2, m) / 5, 0.45), 0.25, 9);
+  // (tables / desks only shove a little: they stay flippable and in reach)
+  const vh = clamp(power * 4.6 / Math.pow(Math.max(0.2, m) / 5, 0.45), 0.25, 9) * (flippable(rec) && !light ? 0.45 : 1);
+  // just knocked off a wall: a push toward the wall bounces back into the room instead
+  const wn = rec.wallN;
+  if (wn && wn.until > S.phys.time) {
+    const dn = dir.x * wn.x + dir.z * wn.z;
+    if (dn < 0) { dir = _d2.set(dir.x - wn.x * dn * 1.6, 0, dir.z - wn.z * dn * 1.6); if (dir.lengthSq() < 1e-4) dir.set(wn.x, 0, wn.z); dir.normalize(); }
+  }
   b.velocity.x += dir.x * vh; b.velocity.z += dir.z * vh;
   b.velocity.y += light ? 1.3 + vh * 0.3 : 0.4 + vh * 0.12;
   // tumble forward (axis = up × dir) + wobble; rolling things (chairs, carts) skid and spin instead
   const roll = !!RIDE[rec.type];
-  const spin = vh * (roll ? 0.25 : light ? 2.2 : 1.0);
+  // heavy furniture slides and rocks rather than tumbling (a punched desk stays flippable)
+  const spin = vh * (roll ? 0.25 : light ? 2.2 : flippable(rec) ? 0.15 : 0.4);
   b.angularVelocity.x += dir.z * spin + rnd(-1, 1) * spin * 0.35;
   b.angularVelocity.y += rnd(-1, 1) * (roll ? vh * 1.4 : spin * 0.5);
   b.angularVelocity.z += -dir.x * spin + rnd(-1, 1) * spin * 0.35;
@@ -1559,14 +1581,55 @@ function throwHeld() {
   S.F.group.add(rec.group);
   rec.group.matrixAutoUpdate = false;
   const f = facing();
-  S.phys.reattach(rec, V(wp.x + f.x * 0.3, Math.max(0.6, wp.y + rec.hy), wp.z + f.z * 0.3), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, P.yaw, 0)));
-  rec.body.velocity.set(f.x * 11, 3.2, f.z * 11);
+  // released at shoulder height (clears 0.4–0.8 m sills and the roof parapet) with a slight upward arc;
+  // facing a window / out-zone: aim at the middle of the nearest pane (not its mullion) with a ballistic arc
+  const y0 = Math.min(G.S.F.ceilY - 0.35, P.y + 1.4);
+  const o = V(P.pos.x + f.x * 0.35, y0, P.pos.z + f.z * 0.35);
+  const H = 11, aim = throwAim(o, f);
+  let vy = 2.4;
+  if (aim) {
+    f.set(aim.x - o.x, 0, aim.z - o.z); const d = f.length(); f.multiplyScalar(1 / d);
+    const t = d / H; vy = clamp((aim.y - o.y + 0.5 * 13 * t * t) / t, 1.2, 6);
+    P.yaw = Math.atan2(f.x, f.z);
+  }
+  S.phys.reattach(rec, o, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, P.yaw, 0)));
+  rec.body.velocity.set(f.x * H, vy, f.z * H);
   rec.body.angularVelocity.set(rnd(-8, 8), rnd(-8, 8), rnd(-8, 8));
   rec.energized = S.phys.time + 3;
   syncRec(rec);
   P.char.playOnce(P.heldBoth ? 'smash' : 'punch');
   sfx('whooshKick', { vol: 0.7 });
   P.attackT = 0.35;
+}
+// throw aim-assist: when the player faces a window row or an out-zone (roof edge) within 8 m and ~50°, return a
+// point just past it — the centre of the nearest pane (broken ones preferred) at a height that clears the sill
+function throwAim(o, f) {
+  const F = G.S && G.S.F; if (!F) return null;
+  let best = null, bd = 1e9;
+  const test = (axis, at, side, bays, from, to, y) => {
+    const fc = (axis === 'z' ? f.z : f.x) * side;
+    if (fc < 0.64) return;
+    const dist = (at - (axis === 'z' ? o.z : o.x)) * side;
+    if (dist < 0.25 || dist > 8) return;
+    const t = dist / fc, a = axis === 'z' ? o.x + f.x * t : o.z + f.z * t;
+    let ta;
+    if (bays && bays.length) {
+      let bb = null, bs = 1e9;
+      for (const b of bays) { const s = Math.abs((axis === 'z' ? b.x : b.z) - a) - (b.intact ? 0 : 0.35); if (s < bs) { bs = s; bb = b; } }
+      if (!bb || bs > 1.3) return;
+      ta = axis === 'z' ? bb.x : bb.z;
+    } else {
+      if (from == null || a < from - 0.4 || a > to + 0.4) return;
+      ta = clamp(a, from + 0.3, to - 0.3);
+    }
+    const score = dist - (bays ? 0.05 : 0);
+    if (score >= bd) return;
+    bd = score;
+    best = axis === 'z' ? V(ta, y, at + side * 0.4) : V(at + side * 0.4, y, ta);
+  };
+  for (const W of F.windows) test(W.axis, W.at, W.side, W.bays, null, null, Math.min(W.y1 - 0.25, W.y0 + 0.6));
+  for (const Z of F.outZones) test(Z.axis, Z.at, Z.side, null, Z.from, Z.to, 1.55);
+  return best;
 }
 function special() {
   if (!G.canDamage || P.seated) return;
@@ -1621,7 +1684,7 @@ function rampageCandidate() {
   if (fc) return fc;
   if (P.held) return null;
   const S = G.S, f = facing();
-  let best = null, bs = 1e9;
+  let best = null, bs = 1e9, desk = null, bsD = 1e9, pick = null, bsP = 1e9;
   for (const r of S.phys.records) {
     if (r.removed || r.held || r.fixed || r.riding || r.out) continue;
     const isDesk = flippable(r) && !r.flipped && recUpright(r) > 0.9;
@@ -1636,9 +1699,23 @@ function rampageCandidate() {
     if (a > 1.1 && d > 0.7) continue;
     const s = d + a * 0.8 + (isDesk ? -0.2 : 0);
     if (s < bs) { bs = s; best = r; }
+    if (isDesk && s < bsD) { bsD = s; desk = r; }
+    if (!isDesk && s < bsP) { bsP = s; pick = r; }
   }
   if (tc && tc.score < bs) return tc;
   if (!best) return null;
+  // a table with something pickable on it: tap E = pick the thing up, hold E = flip the table
+  if (desk && pick) {
+    const dp = desk.body.position, pp = pick.body.position;
+    if (pp.y > 0.45 && Math.hypot(pp.x - dp.x, pp.z - dp.z) < Math.max(desk.hx, desk.hz) + 0.3) {
+      const pk = pick, dk = desk, verb = WEAPON[pk.type] ? '들기' : '집기';
+      return {
+        id: 'combo' + dk.id + ':' + pk.id, rec: dk, tapRec: pk, pos: V(dp.x, 0, dp.z), h: 0.55, obj: pk.group,
+        text: TOUCH ? `엎기(꾹) · 톡: ${verb}` : `엎기(꾹) · 톡: ${verb}`, hold: 0.42, range: 99,
+        onDone: () => flipDesk(dk), onTap: () => pickUp(pk),
+      };
+    }
+  }
   const isDesk = flippable(best) && !best.flipped;
   return {
     id: 'rec' + best.id, rec: best, pos: V(best.body.position.x, 0, best.body.position.z), h: isDesk ? 0.55 : best.body.position.y + 0.15, obj: best.group,
@@ -1682,7 +1759,7 @@ function showBill() {
   P.rage = false;
   setFace(total > 0 ? 'relief' : 'normal');
   P.char.setAnim(total > 0 ? 'cheer' : 'idle');
-  G.lastBill = { mode: G.mode, items: items.length, total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1) };
+  G.lastBill = { mode: G.mode, items: items.length, total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null };
 }
 function runTimersNow() { /* timers run on the next ticks; nothing to force */ }
 function endRampage() {
@@ -1809,7 +1886,6 @@ function updatePlayer(dt) {
   const S = G.S;
   const c = P.char;
   if (P.faceT > 0) { P.faceT -= dt; if (P.faceT <= 0) c.setFace(baseFace()); }
-  if (P.attackT > 0) P.attackT -= dt;
   if (P.seated) {
     P.speed = 0;
     c.update(dt, 0);
@@ -1841,7 +1917,7 @@ function updatePlayer(dt) {
     }
     if (A.done && (A.t > 1.1 || ix || iy)) G.arrive = null;
   }
-  if (toys.riding()) { toys.updateRide(dt, mx, mz); return; }
+  if (toys.riding()) { toys.updateRide(dt, mx, mz); keepIn(); return; }
   const carrying = !!P.carry || (P.held && P.heldBoth);
   const vmax = carrying ? 1.9 : (G.rampage || G.mode === 'free' ? 4.7 : 3.0);
   const tx = mx * vmax, tz = mz * vmax;
@@ -1864,6 +1940,7 @@ function updatePlayer(dt) {
     if (d < m && d > 1e-4) { P.pos.x += dx / d * (m - d); P.pos.z += dz / d * (m - d); }
   }
   collideCircle(P.pos, P.r, [S.F.rects], P.y);
+  keepIn();
   const realV = Math.hypot(P.pos.x - P.prev.x, P.pos.z - P.prev.z) / Math.max(dt, 1e-4);
   P.speed = Math.min(realV, Math.hypot(P.vel.x, P.vel.z));
   if (P.speed > 0.25 && (mx || mz)) P.yaw = angLerp(P.yaw, Math.atan2(P.vel.x, P.vel.z), dt * 12);
@@ -1873,9 +1950,15 @@ function updatePlayer(dt) {
     if (P.onGround && P.controls && !G.busy && !P.carry) { P.vy = 6.0; P.onGround = false; c.playOnce('jump'); sfx('jump', { vol: 0.45 }); }
   }
   if (G.thrust > 0) { P.onGround = false; P.vy = Math.min(Math.max(P.vy, G.thrustMax), P.vy + G.thrust * dt); }
+  // raised walkable floors (ctx.ground): only floors that declare them; others keep y = 0 (and their own hooks)
+  const gh = S.F.grounds.length ? groundAt(S.F, P.pos.x, P.pos.z) : 0;
+  if (P.onGround && S.F.grounds.length) {
+    if (gh > P.y + 1e-3) { if (gh - P.y <= 0.45) P.y = gh; }
+    else if (gh < P.y - 1e-3) { if (P.y - gh <= 0.25) P.y = gh; else { P.onGround = false; P.vy = 0; } }
+  }
   if (!P.onGround) {
     P.vy -= 18 * dt; P.y += P.vy * dt;
-    if (P.y <= 0) { P.y = 0; P.vy = 0; P.onGround = true; c.playOnce('land'); sfx('land', { vol: 0.5 }); }
+    if (P.y <= gh) { P.y = gh; P.vy = 0; P.onGround = true; c.playOnce('land'); sfx('land', { vol: 0.5 }); }
   }
   // animation
   let anim;
@@ -1894,6 +1977,23 @@ function updatePlayer(dt) {
   S.phys.setPlayer(P.pos.x, P.y, P.pos.z, (P.pos.x - P.prev.x) / dt, P.onGround ? 0 : P.vy, (P.pos.z - P.prev.z) / dt);
 }
 
+function groundAt(F, x, z) {
+  let h = 0;
+  for (const g of F.grounds) if (x > g.x0 && x < g.x1 && z > g.z0 && z < g.z1 && g.h > h) h = g.h;
+  return h;
+}
+// window panes / out-zones stop bodies only when intact; the player never leaves the building through them
+// (not even by jumping the sill or riding a chair at a broken pane)
+function keepIn() {
+  const F = G.S && G.S.F; if (!F) return;
+  const m = P.r + 0.06;
+  for (const Z of F.outZones) {
+    const a = Z.axis === 'z' ? P.pos.x : P.pos.z;
+    if (a < Z.from - 0.3 || a > Z.to + 0.3) continue;
+    const c = Z.axis === 'z' ? P.pos.z : P.pos.x, d = (c - Z.at) * Z.side;
+    if (d > -m && d < 3) { const v = Z.at - Z.side * m; if (Z.axis === 'z') P.pos.z = v; else P.pos.x = v; }
+  }
+}
 // ---- interaction focus + prompt
 function updateInteract(dt) {
   let cand = null;
@@ -1905,7 +2005,7 @@ function updateInteract(dt) {
     }
     if (!cand && G.canDamage) cand = rampageCandidate();
   }
-  if (!cand || !G.focus || cand.id !== G.focus.id) G.holdT = 0;
+  if (!cand || !G.focus || cand.id !== G.focus.id) { G.holdT = 0; G.tapArm = false; }
   G.focus = cand;
   // a quick tap (down + up between two frames) still counts once
   const press = (_bot && _bot.on) ? _bot.interact : (IN.interact || IN.interactQ > 0);
@@ -1913,10 +2013,14 @@ function updateInteract(dt) {
   if (cand) {
     if (press && !G.needRelease) {
       if (cand.hold > 0) {
-        G.holdT += dt;
-        if (G.holdT >= cand.hold) { G.holdT = 0; G.needRelease = !(_bot && _bot.on); fire(cand); }
+        G.holdT += dt; G.tapArm = !!cand.onTap;
+        if (G.holdT >= cand.hold) { G.holdT = 0; G.tapArm = false; G.needRelease = !(_bot && _bot.on); fire(cand); }
       } else { G.needRelease = !(_bot && _bot.on); fire(cand); }
-    } else if (!press) G.holdT = 0;
+    } else if (!press) {
+      // let go before the hold finished: a tap (tap E = pick up, hold E = flip)
+      if (G.tapArm && cand.onTap && G.holdT > 0 && G.holdT < cand.hold) { G.tapArm = false; G.holdT = 0; try { cand.onTap(); } catch (e) { report(e); } G.focus = null; }
+      G.holdT = 0; G.tapArm = false;
+    }
   } else if (P.held && press && !G.needRelease) { G.needRelease = !(_bot && _bot.on); throwHeld(); }
   if (_bot && _bot.on && _bot.interact && cand && cand.hold === 0) _bot.interact = false;
 }
@@ -1953,6 +2057,7 @@ function tick(dt) {
   const attackDown = G.mode !== 'title' && !G.busy && P.controls && (IN.attack || !!(_bot && _bot.on && (_bot.attack || _bot.spray)));
   const tu = toys.update(gdt, attackDown);
   G.thrust = tu.thrust; G.thrustMax = tu.vmax || 3;
+  if (P.attackT > 0) P.attackT -= rdt; // swing cooldown on the real clock: hit-stop / slow-mo never make you slower
   updatePlayer(gdt > 0 ? gdt : rdt * 0.06);
   updateInteract(rdt);
   // physics
@@ -1999,6 +2104,11 @@ function tick(dt) {
   if (G.rampage && S.navT > 1.5) { S.navT = 0; rebuildNav(S); }
   // NPCs
   const ctx = npcCtx();
+  if (S.F.grounds.length) for (const n of S.npcs) {
+    if (n.gone || n.state === 'air') continue;
+    const h = groundAt(S.F, n.pos.x, n.pos.z);
+    if (n.y !== h) n.y = h > n.y ? h : Math.max(h, n.y - gdt * 3.5);
+  }
   for (const n of S.npcs) { try { n.update(gdt, ctx); } catch (e) { report(e); } }
   for (const w of S.walkers) w.update(gdt, ctx);
   for (const fn of S.F.animate) fn(gdt, G.time);
@@ -2097,7 +2207,7 @@ function start(mode, opts = {}) {
   G.mode = mode; G.opts = Object.assign({ floor: 'office', gender: ui.settings.gender }, opts);
   G.paused = false; ui.pause(false); ui.bill(null); ui.title(false); ui.elevator(null); G.evPanel = null;
   ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
-  resetDamage(); G.rampage = false; G.canDamage = false; G.timeLeft = null; G.stress = 0; G.queue = [];
+  resetDamage(); G.rampage = false; G.canDamage = false; G.timeLeft = null; G.stress = 0; G.queue = []; G.stressLog = [];
   if (G.opts.gender && G.opts.gender !== (P.char.group.name.endsWith('F') ? 'f' : 'm')) setPlayerChar(G.opts.gender);
   // fresh floors (reuse the title office if nobody touched it)
   const keep = G.floors.office && !G.floors.office.used && Object.keys(G.floors).length === 1 && mode === 'story';
@@ -2105,7 +2215,7 @@ function start(mode, opts = {}) {
   else { scene.remove(G.S.F.group); G.S = null; G.floors.office.used = true; }
   fx.clear();
   Q.done = DEBUG; Q.samples.length = 0; Q.stable = 0;
-  if (mode === 'story') { G.scene = 'copier'; return gotoScene('copier'); }
+  if (mode === 'story') { STORY_ORDER = G.opts.len === 'long' ? STORY_LONG : STORY_SHORT; G.storyT0 = G.rtime; G.scene = 'copier'; return gotoScene('copier'); }
   if (mode === 'rush') {
     return transition({ time: '오후 3:00', title: '1분 난동', sub: '참지 말고, 다 뒤집어엎자' }, () => {
       G.preset = 'day';
@@ -2455,6 +2565,8 @@ if (DEBUG) {
       return o;
     },
     fxStats() { return fx.stats(); },
+    stressCap: () => storyStressCap(),
+    stressLog: () => (G.stressLog || []).slice(),
     // drop any prop on the floor at (x, z) (tests: a chair in an empty aisle)
     spawn(type, x, z, rotY = 0, opts = {}) {
       const S = G.S, p = makeAny(type, opts);

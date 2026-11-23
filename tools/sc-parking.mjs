@@ -32,7 +32,7 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
   for (let i = 0; i < 12 && car.stage < 4; i++) { await kick(); car = await ev('__ppg.rec("bossCar")'); }
   s = await step(30);
   expect(car.stage === 4 && car.destroyed, 'boss car wrecked (stage ' + car.stage + ')');
-  expect(s.money - m0 > 1000000, `wrecking the boss car pays big (${m0} → ${s.money})`);
+  expect(s.money - m0 > 300000 && s.money - m0 < 900000, `wrecking the boss car is a jackpot, not the whole bill (${m0} → ${s.money})`);
   await shot('pk-3-wreck');
   let ch = await ev('__ppg.chal()');
   expect(ch.find((c) => c.id === 'p1').done && ch.find((c) => c.id === 'p2').done, 'challenges 유리 깨기 + 폐차 done');

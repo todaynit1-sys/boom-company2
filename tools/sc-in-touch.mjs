@@ -78,7 +78,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   // prompt label on touch
   s = await step(4);
   const pk = await ev('document.querySelector("#prompt .kc b").textContent');
-  expect(s.focus === '엎기' && pk === '행동', `prompt shows the 행동 button name (focus=${s.focus}, key=${pk})`);
+  expect((s.focus || '').startsWith('엎기') && pk === '행동', `prompt shows the 행동 button name (focus=${s.focus}, key=${pk})`);
   const ib = await center('.t-interact');
   await I.touch('touchStart', [{ x: ib.x, y: ib.y, id: 4 }]);
   s = await step(10);
@@ -87,6 +87,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   await I.touch('touchEnd', []);
   expect((s.counts.flip || 0) === 1, 'holding 행동 flips the desk');
   await shot(`it-${tag}-1-flip`);
+  s = await step(45); // let the flip's landing slow-mo pass
   const jbtn = await center('.t-jump');
   await tapAt(jbtn.x, jbtn.y);
   s = await step(6);

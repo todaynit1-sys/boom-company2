@@ -110,9 +110,15 @@
         <p class="tagline">참다 참다 터지는 하루</p>
       </div>
       <div class="t-menu">
-        <button type="button" class="mbtn m-story" data-mode="story">
-          <b>출근하기</b><small>하루 이야기 · 약 5분</small><em id="t-days" hidden></em>
-        </button>
+        <div class="story-wrap">
+          <button type="button" class="mbtn m-story" data-mode="story">
+            <b>출근하기</b><small id="t-len-sub">하루 이야기 · 상황 3개 · 약 4분</small><em id="t-days" hidden></em>
+          </button>
+          <div class="seg t-len" id="t-len" role="group" aria-label="하루 길이">
+            <button type="button" data-len="short">짧게 · 상황 3개</button>
+            <button type="button" data-len="long">길게 · 상황 8개</button>
+          </div>
+        </div>
         <button type="button" class="mbtn m-rush" data-mode="rush">
           <b>1분 난동</b><small id="t-best">최고 기록 없음 · 첫 기록을 남겨 보세요</small>
         </button>

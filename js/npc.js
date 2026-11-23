@@ -34,7 +34,8 @@ export class NPC {
     this.gone = false;
     this.lastMoved = new THREE.Vector3(); this.stuckT = 0;
     this.panicked = false; this.hitCount = 0;
-    this.sitY = spec.sofa ? -0.045 : 0;
+    // seat height offset vs an office chair: ctx.npc(…, { seatY: 0.11 }) for higher chairs (12층 board chairs)
+    this.sitY = spec.seatY != null ? spec.seatY : spec.sofa ? -0.045 : 0;
     this.char.setAnim(this.baseAnim);
     this.char.setFace(this.baseFace);
     if (spec.anim === 'sit' || spec.anim === 'type' || spec.anim === 'stretch') this.seated = true;

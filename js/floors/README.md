@@ -129,6 +129,20 @@ emit(kind, rec) stress(d) alarm(pos, r) hitRec(rec, dmg, dir, power) setState(re
   compressed above ₩80,000 (`phys.js → payPrice`: 250k → 135k, 800k → 190k, 3M → 254k, 6M → 287k, 15M → 330k),
   so a floor's jackpots are worth ~2–4 ordinary smashes, not a whole minute. A floor's six challenge bonuses are
   scaled to ≤ ₩420,000 in total. Pricing a prop higher still makes it a bigger jackpot, just not linearly.
+* `ctx.prop` merges a prop's parts into a few meshes (and batches repeats), so `geometry.parameters` is gone on
+  the result — find parts by material / `material.map`, not by geometry size.
+* Targeting heights: punches / kicks (`pickTarget`) ignore bodies whose centre is above y 2.2 (2.8 for hung
+  things); the E prompt (pick up / flip / ride) ignores bodies above y 1.6. Put interactive things lower.
+* E on a table with something small on it: **tap E** picks the thing up, **hold E** flips the table (one prompt).
+* Throws leave the hand at shoulder height (~1.4 m) with a slight arc; facing a window row / out-zone within 8 m,
+  the throw aims at the middle of the nearest pane (broken panes preferred) or the zone edge. The player can never
+  pass an out-zone plane (broken panes included).
+* Seated people on higher chairs: `ctx.npc(…, { seatY: 0.11 })` (offset vs an office chair; sofas −0.045).
+* Raised walkable floor: `ctx.ground(x0, z0, x1, z1, h)` — the player steps up ≤ 0.45 m / down ≤ 0.25 m (else
+  falls), people walk on it. Only floors that declare grounds use it (3층 still runs its own `heightAt` hook).
+* Wall-hung props step 7 cm off the wall when knocked loose and bounce back into the room if punched toward
+  the wall; physics substeps when something flies faster than 6 m/s and caps speeds at 16 m/s (no tunnelling
+  through 0.2 m partitions).
 * Every floor needs an elevator (`ctx.room` adds a pair) and walkable space in front of it; keep 1 m around it clear.
 * Dynamic props spawn asleep at y (default 0); stack with `y`. Fixed props get a walking rect from their bounds.
 * Don't put things outside `size`: the nav grid and camera clamp use it; walls should sit on the bounds.

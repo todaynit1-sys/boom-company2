@@ -69,7 +69,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   const seat2 = await ev(`(() => { const F = __ppg.G.S.F; const occ = new Set(__ppg.G.S.npcs.filter(n => n.spec && n.spec.seat).map(n => n.spec.seat)); const s = F.seats.filter(s => !s.player && !occ.has(s) && s.x > 2 && s.x < 9)[0]; return { x: s.x, z: s.z, rotY: s.rotY }; })()`);
   await ev(`__ppg.tp(${seat2.x}, ${seat2.z}); __ppg.yaw(${seat2.rotY}); true`);
   s = await step(8);
-  expect(s.focus === '엎기', 'prompt shows 엎기 at a desk (focus=' + s.focus + ')');
+  expect((s.focus || '').startsWith('엎기'), 'prompt shows 엎기 at a desk (focus=' + s.focus + ')');
   const pr = await I.rect('#prompt');
   expect(!!pr, 'E prompt visible on screen ' + JSON.stringify(pr));
   await I.down('KeyE');

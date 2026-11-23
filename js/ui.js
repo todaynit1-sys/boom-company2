@@ -9,7 +9,7 @@ const now = () => performance.now();
 
 /* ---------- 설정 ---------- */
 const SKEY = 'ppg.settings';
-const settings = { sfx: true, bgm: true, vibe: true, calm: false, gender: 'm' };
+const settings = { sfx: true, bgm: true, vibe: true, calm: false, gender: 'm', storyLen: 'short' };
 try {
   const saved = JSON.parse(localStorage.getItem(SKEY) || 'null');
   if (saved && typeof saved === 'object') {
@@ -17,6 +17,7 @@ try {
   }
 } catch (e) { /* 저장소를 못 쓰면 기본값 */ }
 if (settings.gender !== 'f') settings.gender = 'm';
+if (settings.storyLen !== 'long') settings.storyLen = 'short';
 function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) { /* 무시 */ } }
 
 /* ---------- 터치 기기 판별 ---------- */
@@ -244,6 +245,9 @@ function moveJoy(x, y) {
 function syncTitleOpts() {
   for (const b of E['t-gender'].querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.g === settings.gender));
   for (const b of E.title.querySelectorAll('.tg')) b.setAttribute('aria-pressed', String(!!settings[b.dataset.set]));
+  for (const b of E.title.querySelectorAll('[data-len]')) b.setAttribute('aria-pressed', String(b.dataset.len === settings.storyLen));
+  const sub = document.getElementById('t-len-sub');
+  if (sub) sub.textContent = settings.storyLen === 'long' ? '하루 이야기 · 상황 8개 · 약 9분' : '하루 이야기 · 상황 3개 · 약 4분';
 }
 function helpHTML() {
   if (isTouch) return '왼쪽 아래를 끌어 걷고, 오른쪽 화면을 끌어 둘러봐요. 오른쪽 버튼으로 때리고 집고 뛰어요.';
@@ -287,7 +291,8 @@ function bindUI() {
   bound = true;
   const on = (el, fn) => el && el.addEventListener('click', (e) => { fn(e); blurActive(); });
   on(E['btn-pause'], () => call('pause'));
-  for (const b of E.title.querySelectorAll('[data-mode]')) on(b, () => call('start', b.dataset.mode, { floor: 'office', gender: settings.gender }));
+  for (const b of E.title.querySelectorAll('[data-mode]')) on(b, () => call('start', b.dataset.mode, { floor: 'office', gender: settings.gender, len: settings.storyLen }));
+  for (const b of E.title.querySelectorAll('[data-len]')) on(b, () => { settings.storyLen = b.dataset.len === 'long' ? 'long' : 'short'; saveSettings(); syncTitleOpts(); });
   for (const b of E.title.querySelectorAll('[data-free]')) on(b, () => call('start', 'free', { floor: b.dataset.free, gender: settings.gender }));
   for (const b of E['t-gender'].querySelectorAll('button')) on(b, () => {
     settings.gender = b.dataset.g; saveSettings(); syncTitleOpts(); call('setting', 'gender', settings.gender);

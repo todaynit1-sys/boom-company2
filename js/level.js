@@ -76,7 +76,7 @@ function newFloor(kind) {
   return {
     kind, group, decor: new THREE.Group(), spec: null,
     rects: [], bodies: [], props: [], elevators: [], npcs: [], anchors: {}, lights: [], animate: [], walkers: [],
-    disposables: [], ropes: [], seats: [], desks: [], sprinklers: [], windows: [], outZones: [],
+    disposables: [], ropes: [], seats: [], desks: [], sprinklers: [], windows: [], outZones: [], grounds: [],
     bounds: { minX: -13, maxX: 13, minZ: -9, maxZ: 9 }, ceilY: 3, skyMesh: null, sky: 'day',
   };
 }
@@ -353,6 +353,9 @@ function makeCtx(F, spec, low) {
     rope: (a, b) => F.ropes.push({ a, b, mesh: null }),
     // ---- out of the building
     window: (o) => windowRow(F, o),
+    // walkable raised floor (stage, platform, step): axis-aligned x0..x1 × z0..z1 at height h. The player steps up
+    // ≤ 0.45 m, steps down ≤ 0.25 m (else falls); people walk on it. Draw it yourself (ctx.box without collide).
+    ground: (x0, z0, x1, z1, h) => F.grounds.push({ x0: Math.min(x0, x1), x1: Math.max(x0, x1), z0: Math.min(z0, z1), z1: Math.max(z0, z1), h }),
     outZone: (o) => F.outZones.push(Object.assign({ side: -1, from: -1e9, to: 1e9, label: '밖으로!' }, o)),
     // ---- anchors
     spawn(x, z, yaw = 0) { F.anchors.spawn = V(x, 0, z); F.anchors.spawnYaw = yaw; },

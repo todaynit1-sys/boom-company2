@@ -90,12 +90,27 @@ export function createPhys(F) {
     step(dt) {
       if (dt <= 0) return;
       P.time += dt;
-      world.step(Math.min(dt, 1 / 30));
+      // poor man's CCD: when something is flying fast, step in halves / thirds so a 0.2 m partition is never
+      // skipped in one step (cannon-es has no continuous collision); speeds are capped at 16 m/s
+      let pre = 0;
+      for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        if (r.removed || r.held || r.fixed || r.body.sleepState === SLEEPING) continue;
+        const v = r.body.velocity, s2 = v.x * v.x + v.y * v.y + v.z * v.z;
+        if (s2 > pre) pre = s2;
+      }
+      P.fast = Math.sqrt(pre);
+      const h = Math.min(dt, 1 / 30), n = P.fast > 11 ? 3 : P.fast > 6 ? 2 : 1;
+      for (let k = 0; k < n; k++) world.step(h / n);
       let awake = 0;
       for (let i = 0; i < records.length; i++) {
         const r = records[i];
         if (r.removed || r.held || r.fixed) continue;
         const aw = r.body.sleepState !== SLEEPING;
+        if (aw) {
+          const v = r.body.velocity, s2 = v.x * v.x + v.y * v.y + v.z * v.z;
+          if (s2 > 256) { const k = 16 / Math.sqrt(s2); v.x *= k; v.y *= k; v.z *= k; }
+        }
         if (aw) awake++;
         if (aw || r.awakeLast) syncRec(r);
         r.awakeLast = aw;
@@ -119,6 +134,12 @@ export function createPhys(F) {
       rec.fixed = false; rec.hang = false;
       const b = rec.body;
       b.type = CANNON.Body.DYNAMIC; b.mass = clamp(rec.mass || 1, 0.15, 160); b.updateMassProperties();
+      // a wall-hung thing faces the room (local +Z): step it off the wall so a punch toward the wall can't
+      // start it inside the wall body (thin portraits used to tunnel through)
+      const q = b.quaternion, fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+      b.position.x += fx * 0.07; b.position.z += fz * 0.07;
+      b.velocity.x += fx * 0.6; b.velocity.z += fz * 0.6;
+      rec.wallN = { x: fx, z: fz, until: P.time + 1.0 };
       b.wakeUp();
       rec.heavy = rec.mass >= HEAVY;
       return true;

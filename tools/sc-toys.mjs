@@ -60,7 +60,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   // ---- boss nameplate out of the window
   await ev('__ppg.near("bossPlate", 0.75, [-1, 0])');
   s = await step(4);
-  expect(s.focus === '집기', 'prompt 집기 at the nameplate (focus=' + s.focus + ')');
+  expect((s.focus || '').endsWith('집기'), 'prompt 집기 (tap) at the nameplate (focus=' + s.focus + ')');
   await I.tap('KeyE'); s = await step(6);
   expect(s.player.held === 'nameplate', 'holding the nameplate');
   await ev('__ppg.tp(-1.6, -7.7); __ppg.yaw(Math.PI); __ppg.look(Math.PI, 0.2)');
