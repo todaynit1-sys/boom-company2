@@ -733,6 +733,7 @@ const LEVEL = {
   breakWood: 0.43, breakGlass: 0.35, breakMetal: 0.3, breakPlastic: 0.36, breakCeramic: 0.32, crash: 0.385, flip: 0.62, special: 0.36, boom: 0.67,
   clap: 1.6, wind: 1.0,
   coin: 1.8, comboUp: 0.78, bigMoney: 0.78, bonus: 0.7, specialReady: 0.62,
+  ko: 0.8, bonk: 1.6, soul: 2.5, soulBack: 2.5,
 };
 
 // sounds whose pitch must not be randomly jittered (musical / UI)
@@ -745,6 +746,7 @@ const DUCK = {
   breakWood: [6, 0.15], breakGlass: [6, 0.15], breakMetal: [6, 0.18], breakPlastic: [5, 0.14], breakCeramic: [6, 0.15],
   flip: [6, 0.35, 0.3], crash: [9, 0.35], boom: [9, 0.4], farCrash: [4, 0.2], bigMoney: [3, 0.15], splash: [3, 0.15],
   special: (x) => { const L = clamp(x && Number.isFinite(x.at) ? x.at : 0.35, 0.1, 1.5); return [[4, L, 0], [14, 1.0, L]]; },
+  ko: (x) => [[4, 0.2, clamp(x && Number.isFinite(x.at) ? x.at : 0.5, 0.2, 1.5)]], // dips under the thud
 };
 // impacts get round-robin timbre variants + wider pitch jitter on quick repeats
 const VARIED = new Set(['punch', 'kick', ...Object.keys(DUCK).filter((k) => /^(hit|break)/.test(k))]);

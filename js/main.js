@@ -1540,7 +1540,7 @@ const PERSON_HIT = {
   domino: [0.8, 1], blast: [1.2, 2], shout: [0.35, 1], spray: [0.3, 1], knock: [1.0, 1],
 };
 // KO pay: a coworker ≈ a mid-size prop (치료비), the boss / CEO a jackpot (위자료); a repeat KO of the same person pays ¼
-const KO_PAY = { worker: 20000, guard: 40000, exec: 40000, boss: 150000, ceo: 150000 };
+const KO_PAY = { worker: 20000, guard: 40000, exec: 40000, boss: 120000, ceo: 120000 };
 function koPayOf(n) { return KO_PAY[n.role] || KO_PAY.worker; }
 function koBillLine(n) {
   if (n.role === 'ceo' || n.spec.name === 'ceo') return '사장님 기절 — 위자료';

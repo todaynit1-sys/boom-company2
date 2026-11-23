@@ -169,7 +169,7 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
     const glassesOff = await ev(`__ppg.G.S.npcs[${bi}]._glasses != null`);
     const names = (await ev('__ppg.sfxLog(true)')).map((e) => e.n);
     log('boss KO', JSON.stringify({ bubble: n.bubble, money: st.money - mBefore, glassesOff, names: names.slice(-14) }));
-    expect(st.money - mBefore >= 150000, `boss KO pays 위자료 ≥ 150,000 (${st.money - mBefore})`);
+    expect(st.money - mBefore >= 120000, `boss KO pays 위자료 ≥ 120,000 (${st.money - mBefore})`);
     expect(glassesOff, 'glasses flew off');
     expect(names.includes('bigMoney'), 'bigMoney rang');
     expect(/연봉|휴가|승진/.test(n.bubble || ''), 'boss KO bubble: ' + n.bubble);
@@ -184,7 +184,7 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
     expect(bill.people.some((p) => /부장님 기절 — 위자료/.test(p.name)), 'bill line "부장님 기절 — 위자료"');
     expect(rows.some((r) => r.startsWith('sec|')), 'bill has a people section header');
     const ppl = bill.people.reduce((a, p) => a + p.amount, 0);
-    expect(ppl === 150000 && bill.total >= ppl, `people lines = the KO pay, inside the total (${ppl} of ${bill.total}; all lines ${sum})`);
+    expect(ppl === 120000 && bill.total >= ppl, `people lines = the KO pay, inside the total (${ppl} of ${bill.total}; all lines ${sum})`);
     await shot('ko-e-bill');
   }
 
@@ -246,16 +246,19 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
     const r0 = await ev('__ppg.render()');
     await ev('__ppg.G.special = 1');
     await I.tap('KeyQ');
-    await step(90, 15);
+    await step(360, 30);
     const s = await ev('__ppg.state()');
-    await step(60, 15);
     const r1 = await ev('__ppg.render()');
     const ks = await ev('__ppg.koStats()');
     await shot('ko-h-stress');
     const t0 = Date.now(); await step(60, 60); const ms = (Date.now() - t0) / 60;
-    log('stress', JSON.stringify({ npcs: s.npcs, before: r0, withStars: r1, koStats: ks, msPerTick: ms.toFixed(1) }));
-    expect(s.npcs.total >= 40 && s.npcs.ko >= 8, `40 people, many KO'd (${s.npcs.ko})`);
-    expect(r1.calls <= r0.calls + 12, `draw calls flat with stars up (${r0.calls} → ${r1.calls})`);
+    // same scene with every star ring / soul puff switched off: the difference is what the KO fx cost
+    await ev('for (const n of __ppg.G.S.npcs) { n.starsOn = false; n.ghostOn = false; }');
+    await step(70, 35);
+    const r2 = await ev('__ppg.render()'), ks2 = await ev('__ppg.koStats()');
+    log('stress', JSON.stringify({ npcs: s.npcs, beforeSpecial: r0, withStars: r1, starsOff: r2, koStats: ks, koStatsOff: ks2, msPerTickSwiftshader: ms.toFixed(1) }));
+    expect(s.npcs.total >= 40 && s.npcs.koTotal >= 8, `40 people, many KO'd (${s.npcs.koTotal})`);
+    expect(ks.starsVisible && !ks2.starsVisible && r1.calls - r2.calls <= 8, `16 star rings (80 stars) cost one instanced mesh: ≤ 8 calls over all render passes (${r1.calls} vs ${r2.calls} without)`);
   }
 
   // ---------------------------------------------------------------- I: megaphone shout / extinguisher spray / ride feed 멘탈
