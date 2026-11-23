@@ -81,9 +81,14 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
   s = await step(4);
   await I.tap('KeyE'); s = await step(6);
   expect(s.toys.ride && s.toys.ride.kind === 'cart', 'E hops on the cart (' + s.focus + ')');
-  await ev('__ppg.tp(-5.2, 6.8); __ppg.look(Math.atan2(-7.4 + 5.2, 8.45 - 6.8), 0.3)');
+  // the dock's tyre stacks / boxes may have been blown away by the drum bursts above (harder impulses since
+  // the polish pass): aim at whatever breakable thing is still standing in the open, 3.5 m ahead
+  await ev('__ppg.spawn("tireStack", 0, 0); __ppg.spawn("box", 1.2, 0.3); __ppg.spawn("cone", 2.2, -0.3)');
+  await ev('__ppg.tp(-3.5, 0); __ppg.look(Math.PI / 2, 0.3)');
   const r0 = await fc('ram');
-  await I.down('KeyW'); s = await step(70, 10); await I.up('KeyW');
+  await I.down('KeyW');
+  for (let k = 0; k < 7; k++) { s = await step(10, 10); log('cart', k, JSON.stringify({ p: [s.player.x, s.player.z], ride: s.toys.ride, ram: await fc('ram') })); }
+  await I.up('KeyW');
   await shot('pk-7-cart');
   s = await step(20);
   expect((await fc('ram')) > r0, 'riding the cart into things counts rams (' + r0 + ' → ' + (await fc('ram')) + ')');

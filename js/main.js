@@ -1704,10 +1704,11 @@ function rampageCandidate() {
   }
   if (tc && tc.score < bs) return tc;
   if (!best) return null;
-  // a table with something pickable on it: tap E = pick the thing up, hold E = flip the table
+  // a flippable table in reach and a pickable thing too (on it or next to it, whichever has the better score):
+  // tap E = pick the thing up, hold E = flip the table — one prompt "엎기(꾹) · 톡: 집기"
   if (desk && pick) {
-    const dp = desk.body.position, pp = pick.body.position;
-    if (pp.y > 0.45 && Math.hypot(pp.x - dp.x, pp.z - dp.z) < Math.max(desk.hx, desk.hz) + 0.3) {
+    const dp = desk.body.position;
+    {
       const pk = pick, dk = desk, verb = WEAPON[pk.type] ? '들기' : '집기';
       return {
         id: 'combo' + dk.id + ':' + pk.id, rec: dk, tapRec: pk, pos: V(dp.x, 0, dp.z), h: 0.55, obj: pk.group,
