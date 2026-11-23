@@ -659,6 +659,16 @@ const SFX = {
     noise(c, o, t, { lp: 2400 * p, ff1: 600, a: 0.005, d: 0.5, v: 0.5 }),
     scatter(t + 0.05, 12, 0.6, (tt, k) => tone(c, o, tt, { f: rand(700, 1600) * p, f1: rand(1800, 2600) * p, a: 0.003, d: 0.05, v: 0.1 * k })),
     thump(c, o, t, 90 * p, 50, 0.15, 0.5)),
+  // rooftop gust (~2.5 s): band of noise swelling up and falling away + a whistling upper band + low rumble.
+  // Callable again and again as ambience (soft, no transient).
+  wind: (c, o, t, p) => M(
+    noise(c, o, t, { bp: 380 * p, q: 0.9, ffs: [[0.9, 900 * p], [1.7, 560 * p], [2.4, 320 * p]], a: 0.9, h: 0.5, d: 1.1, v: 0.5 }),
+    noise(c, o, t + 0.2, { bp: 1400 * p, q: 2.5, ffs: [[0.8, 2300 * p], [1.8, 1100 * p]], a: 0.8, h: 0.3, d: 1.0, v: 0.1 }),
+    noise(c, o, t, { lp: 180 * p, a: 0.7, h: 0.6, d: 1.1, v: 0.32 })),
+  // audience applause burst (~1.2 s): dozens of hand claps scattered in stereo over a soft crowd wash
+  clap: (c, o, t, p) => M(
+    noise(c, o, t, { bp: 1500 * p, q: 0.6, a: 0.06, h: 0.55, d: 0.55, v: 0.16 }),
+    spray(c, o, t, 46, 1.0, 0.85, (d, tt, k) => noise(c, d, tt, { bp: rand(900, 2300) * p, q: 1.2, a: 0.001, d: rand(0.012, 0.03), v: 0.55 * k }))),
   pop: (c, o, t, p) => M(noise(c, o, t, { bp: 1800 * p, q: 0.7, a: 0.001, d: 0.06, v: 0.8 }), thump(c, o, t, 180 * p, 90, 0.05, 0.5)),
   boom: (c, o, t, p) => M(
     crack(c, o, t, { hp: 1500, v: 1, d: 0.005 }),
@@ -694,6 +704,7 @@ const LEVEL = {
   whoosh: 1.3, whooshPunch: 1.3, whooshKick: 1.3, punch: 0.67, kick: 0.58,
   hitWood: 0.83, hitMetal: 0.52, hitGlass: 0.64, hitPlastic: 0.61, hitSoft: 0.8, hitPaper: 1.0, hitCeramic: 0.64, hitPlant: 0.79,
   breakWood: 0.43, breakGlass: 0.35, breakMetal: 0.3, breakPlastic: 0.36, breakCeramic: 0.32, crash: 0.385, flip: 0.62, special: 0.36, boom: 0.67,
+  clap: 1.6, wind: 1.0,
   coin: 1.8, comboUp: 0.78, bigMoney: 0.78, bonus: 0.7, specialReady: 0.62,
 };
 

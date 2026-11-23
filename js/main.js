@@ -855,8 +855,14 @@ function sceneNext() {
   if (i < 0) { order = STORY_LONG; i = order.indexOf(G.scene); } // (a situation reached with __ppg.goto)
   gotoScene(order[Math.min(order.length - 1, i + 1)]);
 }
+// [situation that just ended, stress at its end, game time] — the story stress curve (debug + tests)
+function logStoryStress() {
+  if (G.mode !== 'story' || !STORY[G.scene]) return;
+  const L = G.stressLog || (G.stressLog = []);
+  if (!L.length || L[L.length - 1][0] !== G.scene) L.push([G.scene, Math.round(G.stress), +G.rtime.toFixed(1)]);
+}
 function gotoScene(id) {
-  if (G.mode === 'story') (G.stressLog || (G.stressLog = [])).push([G.scene, Math.round(G.stress), +G.rtime.toFixed(1)]);
+  if (G.scene !== id) logStoryStress();
   G.gen++; G.timers.length = 0;
   ui.subtitle(null, null); ui.elevator(null); G.evPanel = null;
   if (STORY[id]) {
@@ -1145,6 +1151,7 @@ function bumpCombo() {
   }
 }
 function startRampage() {
+  logStoryStress();
   G.scene = G.mode === 'free' ? 'free' : 'rampage';
   phase('');
   G.rampage = true; G.canDamage = true; G.busy = false;

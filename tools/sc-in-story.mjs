@@ -57,7 +57,37 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     throw new Error('waitScene timeout ' + JSON.stringify(s && { scene: s.scene, phase: s.phase, busy: s.busy }) + ' ' + JSON.stringify(dbg));
   }
 
+  // situations contributed by floor modules: follow the marker with real keys / clicks until pred(s)
+  const played = new Set();
+  async function follow(pred, s) {
+    for (let guard = 0; guard < 400; guard++) {
+      if (await pred(s)) return s;
+      if (s.scene) played.add(s.scene);
+      const o = s.objective;
+      if (s.busy || !o) { s = await step(15, 15); continue; }
+      if (o.kind === 'elevator') {
+        s = await walkTo(o.x, o.z, { near: 0.2, cond: () => ev('!document.getElementById("elevator").hidden'), tag: 'fs-elev' });
+        s = await step(6);
+        if (await ev('!document.getElementById("elevator").hidden')) {
+          await I.clickSel(`#ev-list .ev-btn[data-id="${o.dest}"]`);
+          s = await waitScene((st) => st.floor === o.dest && !st.busy, 30000);
+        }
+        continue;
+      }
+      if (o.kind === 'interact') {
+        s = await walkTo(o.x, o.z, { near: 0.45, cond: (st) => !!st.focus, tag: 'fs-hold' });
+        if (s.focus) s = await holdE(); else s = await step(10);
+        continue;
+      }
+      s = await walkTo(o.x, o.z, { near: 0.5, cond: (st) => !st.objective || st.objective.x !== o.x || st.objective.z !== o.z, tag: 'fs-walk' });
+    }
+    return s;
+  }
+  // 하루 길이: STORY_LEN=short → 짧게 (copier, coffee, 퇴근 5분 전); default 길게 (all eight by the clock)
+  const LONG = process.env.STORY_LEN !== 'short';
   await I.waitFor('!document.getElementById("title").hidden && document.getElementById("boot").hidden', 15000);
+  await I.clickSel(`#t-len [data-len="${LONG ? 'long' : 'short'}"]`);
+  expect(await ev(`document.querySelector('#t-len [data-len="${LONG ? 'long' : 'short'}"]').getAttribute('aria-pressed') === 'true'`), `title: 하루 길이 ${LONG ? '길게' : '짧게'} selected by click`);
   await I.clickSel('#title [data-mode="story"]');
   let s = await waitScene((s) => s.scene === 'copier' && s.phase === 'walk' && !s.busy);
   log('copier walk', JSON.stringify(s.player), JSON.stringify(s.objective), s.tasks);
@@ -77,7 +107,8 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     expect(s.phase === 'pulled', `hold E pulls the paper (#${k + 1}) phase=${s.phase}`);
     if (k < 2) s = await waitScene((s) => s.phase === 'walk');
   }
-  s = await waitScene((s) => s.scene === 'coffee' && s.phase === 'toLobby' && !s.busy, 40000);
+  s = await waitScene((s) => s.scene !== 'copier' && !s.busy, 40000);
+  s = await follow((s) => s.scene === 'coffee' && s.phase === 'toLobby' && !s.busy, s);
   const taskText1 = await ev('document.getElementById("tasks").textContent');
   expect(taskText0 !== taskText1, `task list updates between scenes ("${taskText0}" → "${taskText1}")`);
   await shot('is-2-coffee');
@@ -118,30 +149,11 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   expect(s.phase === 'delivered', 'hold E delivers the coffee');
   // ---- situations contributed by floor modules (e.g. B2 「사장님 차 빼 주기」): follow the marker with real keys
   s = await waitScene((s) => s.scene !== 'coffee' && !s.busy, 40000);
-  const played = new Set();
-  for (let guard = 0; guard < 60 && s.scene !== 'sunset'; guard++) {
-    played.add(s.scene);
-    const o = s.objective;
-    if (s.busy || !o) { s = await step(15, 15); continue; }
-    if (o.kind === 'elevator') {
-      s = await walkTo(o.x, o.z, { near: 0.2, cond: () => ev('!document.getElementById("elevator").hidden'), tag: 'fs-elev' });
-      s = await step(6);
-      if (await ev('!document.getElementById("elevator").hidden')) {
-        await I.clickSel(`#ev-list .ev-btn[data-id="${o.dest}"]`);
-        s = await waitScene((st) => st.floor === o.dest && !st.busy, 30000);
-      }
-      continue;
-    }
-    if (o.kind === 'interact') {
-      s = await walkTo(o.x, o.z, { near: 0.45, cond: (st) => !!st.focus, tag: 'fs-hold' });
-      if (s.focus) s = await holdE(); else s = await step(10);
-      continue;
-    }
-    s = await walkTo(o.x, o.z, { near: 0.5, cond: (st) => !st.objective || st.objective.x !== o.x || st.objective.z !== o.z, tag: 'fs-walk' });
-  }
-  played.delete('sunset');
+  s = await follow((s) => s.scene === 'sunset', s);
+  for (const k of ['sunset', 'coffee', 'copier']) played.delete(k);
   log('floor scenes played', [...played].join(','));
-  expect(played.size >= 1, 'a floor-module scene was played between the coffee run and 퇴근 5분 전 (' + [...played].join(',') + ')');
+  if (LONG) expect(played.size >= 5, 'long day: the five floor-module situations play (' + [...played].join(',') + ')');
+  else expect(played.size === 0, 'short day: no floor-module situation (' + [...played].join(',') + ')');
   s = await waitScene((s) => s.scene === 'sunset' && s.phase === 'leave' && !s.busy, 40000);
   await shot('is-6-sunset');
   // ---- sunset: head for the elevator, get intercepted
@@ -166,5 +178,13 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   await I.tap('KeyJ'); await step(30);
   await shot('is-8-rampage');
   log('story keys final', JSON.stringify({ scene: s.scene, money: s.money, timeLeft: s.timeLeft }));
+  // situation order (each gotoScene logs the one that just ended + its stress) and the stress curve
+  const sl = (await ev('__ppg.stressLog()')).filter((e) => e[0] !== 'title');
+  const order = sl.map((e) => e[0]);
+  log('situations', JSON.stringify(sl));
+  const want = LONG ? ['copier', 'execReport', 'coffee', 'roofLettuce', 'hallSetup', 'parkingCar', 'pubBooking', 'sunset'] : ['copier', 'coffee', 'sunset'];
+  expect(JSON.stringify(order) === JSON.stringify(want), `${LONG ? 'long' : 'short'} day plays ${want.length} situations in clock order (${order.join(' → ')})`);
+  const pre = sl.filter((e) => e[0] !== 'sunset');
+  expect(pre.every((e, i) => i === 0 || e[1] >= pre[i - 1][1]) && pre.every((e) => e[1] < 100), 'stress rises monotonically and stays < 100 before 퇴근 5분 전 ' + JSON.stringify(sl.map((e) => e[1])));
   if (fails.length) throw new Error(fails.length + ' checks failed: ' + fails.join(' | '));
 };

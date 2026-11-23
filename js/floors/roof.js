@@ -239,8 +239,9 @@ export default {
   },
 
   hooks: {
-    onEnter(game) { syncSky(game); },
-    onTick(game) { syncSky(game); },
+    onEnter(game) { syncSky(game); windT = 0.6; },
+    // open-air ambience: a soft gust every 4–7 s while you are up here
+    onTick(game, dt) { syncSky(game); windT -= dt; if (windT <= 0) { windT = 4 + Math.random() * 3; game.sfx('wind', { vol: 0.32 + Math.random() * 0.15, pitch: 0.85 + Math.random() * 0.3 }); } },
     onDestroy(game, rec) {
       if (rec.tag === 'watertank') { const n = game.npc('worker'); if (n) game.say(n, '물탱크가!! 오늘 물 끊겨요!', 2.6); }
       else if (rec.type === 'lettuce') { const n = game.npc('gardener'); if (n) game.say(n, '부장님 상추가…!', 2.4); }
@@ -257,6 +258,7 @@ function skyMat(THREE, tex2, kind) {
   }
   return SKYMAT[kind];
 }
+let windT = 1;
 function syncSky(game) {
   if (!skyMesh || !skyMesh.parent) return;
   const want = game.G && game.G.preset === 'sunset' ? 'dusk' : 'day';

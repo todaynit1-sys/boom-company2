@@ -260,7 +260,7 @@ export default {
       { hold: { at: 'slot2', text: '의자 펴기', sec: 0.7 } },
       { call: (g) => placeChair(g), sfx: 'hitMetal', done: 1, stress: 1 },
       { sub: ['나', '(…의자는 왜 항상 내가 까는 걸까)', 2000] },
-      { say: ['mc', '자, 지금부터 창립 기념 타운홀을 시작하겠습니다! 박수~', 2.8], sfx: 'fanfare' },
+      { say: ['mc', '자, 지금부터 창립 기념 타운홀을 시작하겠습니다! 박수~', 2.8], sfx: 'clap' },
       { walk: { to: 'listenSpot', r: 0.9 } },
       { npc: { who: 'mc', walk: 'mcAside', speed: 1.2, anim: 'walk' } },
       { npc: { who: 'ceo', walk: 'podiumBack', speed: 1.25, anim: 'walk', arrive: 'talk' } },
