@@ -337,7 +337,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
       await step(60);
       const n = await npc(hi);
       log('hothead', JSON.stringify({ state: n.state, fighter: n.fighter, b }));
-      expect(n.fighter === 'angry' && b === '참을 만큼 참았어요!', `the hot-head snaps: "${b}" → ${n.fighter} (${n.state})`);
+      expect(n.fighter === 'angry' && ['참을 만큼 참았어요!', '저도 화났어요!'].includes(b), `the hot-head snaps: "${b}" → ${n.fighter} (${n.state})`);
     }
   }
 

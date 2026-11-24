@@ -184,7 +184,7 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
     expect(bill.people.some((p) => /부장님 기절 — 위자료/.test(p.name)), 'bill line "부장님 기절 — 위자료"');
     expect(rows.some((r) => r.startsWith('sec|')), 'bill has a people section header');
     const ppl = bill.people.reduce((a, p) => a + p.amount, 0);
-    expect(ppl === 120000 && bill.total >= ppl, `people lines = the KO pay, inside the total (${ppl} of ${bill.total}; all lines ${sum})`);
+    expect(bill.people.find((p) => /부장님 기절/.test(p.name)).amount === 120000 && bill.total >= ppl, `boss line = the KO pay, people lines inside the total (a coworker the flying boss bowled over may add a 치료비 line) (${ppl} of ${bill.total}; all lines ${sum})`);
     await shot('ko-e-bill');
   }
 
