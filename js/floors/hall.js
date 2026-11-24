@@ -212,7 +212,7 @@ export default {
     sitAt('workerF2', 2.39, ROWS[2], { anim: 'stretch', face: 'sleepy', variantSeed: 305 });
     sitAt('chubby', -1.77, ROWS[3], { face: 'sleepy', variantSeed: 306, lines: ['다과는 언제 줘요…?'] });
     ctx.npc('workerF2', -5.2, 4.6, { rotY: 2.4, anim: 'phone', face: 'normal', variantSeed: 307, lines: ['출석 체크만 하고 가야지…'] });
-    ctx.npc('glasses', 7.2, -1.6, { rotY: -2.3, anim: 'lookUp', face: 'sleepy', variantSeed: 308, lines: ['풍선 누가 다 불었대…?'] });
+    ctx.npc('glasses', 7.2, -1.6, { rotY: -2.3, anim: 'lookUp', face: 'sleepy', variantSeed: 308, rank: 'mid', lines: ['풍선 누가 다 불었대…?'] });
 
     // ---------------- anchors
     ctx.spawn(0, 6.7, PI);

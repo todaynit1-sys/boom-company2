@@ -150,7 +150,7 @@ export default {
     ctx.dynProp('paperStack', -12.65, 0.72, -6.05, 0.3);
 
     // ---- standing coworkers
-    ctx.addNpc({ preset: 'workerM2', x: -7.75, z: 7.55, rotY: 2.6, anim: 'talk', face: 'smile', role: 'worker' });
+    ctx.addNpc({ preset: 'workerM2', x: -7.75, z: 7.55, rotY: 2.6, anim: 'talk', face: 'smile', role: 'worker', rank: 'mid' });
     ctx.addNpc({ preset: 'workerF2', x: -8.85, z: 7.35, rotY: 0.75, anim: 'armsCrossed', face: 'normal', role: 'worker', variantSeed: 9 });
     ctx.addNpc({ preset: 'workerM1', x: -2.2, z: -7.6, rotY: PI - 0.3, anim: 'phone', face: 'normal', role: 'worker', variantSeed: 12 });
 

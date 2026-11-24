@@ -158,7 +158,7 @@ export default async ({ ev, shot, log, sleep, send, step }) => {
     }
     n = await npc(bi);
     log('boss after', kicks, 'kicks', JSON.stringify(n));
-    expect(n.ko && kicks === 3, `boss (멘탈 5) goes down on the 3rd kick (${kicks})`);
+    expect(n.ko && kicks === 4, `boss (멘탈 8 since he fights back) goes down on the 4th kick (${kicks})`);
     // the VIP flight is in slow motion: frames until he is flat out, then a close-up (player hidden)
     for (let f = 0; f < 12; f++) { await stepW(12, 6); if (f % 2 === 0) await shot(`ko-e-boss-${f / 2}`); if ((await npc(bi)).state === 'ko') break; }
     await stepW(40);

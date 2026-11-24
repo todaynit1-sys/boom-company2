@@ -174,7 +174,7 @@ export default {
     ctx.prop('ashtray', -10.7, 4.0);
 
     // ---------------- people (on a break; they flee when the rampage starts)
-    ctx.npc('workerM2', -9.75, 4.25, { rotY: -2.4, anim: 'armsCrossed', role: 'smoker', face: 'relief', variantSeed: 91,
+    ctx.npc('workerM2', -9.75, 4.25, { rotY: -2.4, anim: 'armsCrossed', role: 'smoker', rank: 'mid', face: 'relief', variantSeed: 91,
       lines: ['여기서 부장님 얘기하면 안 돼…', '한 대만 피고 갈게~', '옥상 바람이 최고야'] });
     ctx.npc('workerF1', -7.7, 7.0, { rotY: -PI / 2, anim: 'offer', role: 'gardener', face: 'smile', variantSeed: 92,
       lines: ['부장님 상추 건드리면 큰일 나요!', '물은 하루 한 번만~', '이게 다 부장님 거래요…'] });

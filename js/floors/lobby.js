@@ -88,7 +88,7 @@ export default {
       ctx.addNpc({ preset: p, x: q.x + (i === 1 ? 0.05 : 0), z: q.z, rotY: PI, anim: a, face: f, role: 'queue', queueIndex: i, variantSeed: 40 + i });
     });
     A.cutterStart = V(-3.2, 0, -0.6);
-    ctx.addNpc({ preset: 'workerM2', x: -3.2, z: -0.6, rotY: -0.6, anim: 'phone', face: 'smug', role: 'cutter', variantSeed: 51 });
+    ctx.addNpc({ preset: 'workerM2', x: -3.2, z: -0.6, rotY: -0.6, anim: 'phone', face: 'smug', role: 'cutter', rank: 'mid', variantSeed: 51 });
 
     // ---- café tables
     for (const [x, z] of [[-11.2, -2.0], [-11.2, 1.6], [-8.4, 3.6]]) {

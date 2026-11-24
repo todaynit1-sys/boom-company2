@@ -145,7 +145,7 @@ export default {
     const face = (dx, dz) => Math.atan2(-dx, -dz);
     ctx.npc('boss', HEAD[0] - 0.1, HEAD[1] - 0.98, { rotY: -0.55, anim: 'talk', face: 'smug', role: 'boss',
       lines: ['자, 다들 한 잔씩 받아!', '내가 신입 때는 말이야~', '오늘은 내가 쏜다! …1/N로.'] });
-    ctx.npc('glasses', HEAD[0] + STOOL_R, HEAD[1], { rotY: face(STOOL_R, 0), anim: 'sit', face: 'smile', role: 'worker', variantSeed: 92, lines: ['하하… 네, 부장님 최고세요…', '(웃는 얼굴 유지…)'] });
+    ctx.npc('glasses', HEAD[0] + STOOL_R, HEAD[1], { rotY: face(STOOL_R, 0), anim: 'sit', face: 'smile', role: 'worker', rank: 'mid', variantSeed: 92, lines: ['하하… 네, 부장님 최고세요…', '(웃는 얼굴 유지…)'] });
     ctx.npc('workerF1', HEAD[0], HEAD[1] + STOOL_R, { rotY: face(0, STOOL_R), anim: 'sit', face: 'sleepy', role: 'worker', variantSeed: 91, lines: ['내일 아홉 시 출근인데…', '고기 언제 다 익어요…'] });
     ctx.npc('workerM2', SOUTH[0][0] + STOOL_R, SOUTH[0][1], { rotY: face(STOOL_R, 0), anim: 'sit', face: 'endure', role: 'worker', variantSeed: 93, lines: ['부장님 18번 또 나오겠다…'] });
     ctx.npc('chubby', SOUTH[1][0], SOUTH[1][1] - STOOL_R, { rotY: face(0, -STOOL_R), anim: 'sit', face: 'sleepy', role: 'worker', variantSeed: 94, lines: ['고기 한 판 더 시켜도 되나…'] });

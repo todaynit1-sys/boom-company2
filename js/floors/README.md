@@ -166,8 +166,16 @@ emit(kind, rec) stress(d) alarm(pos, r) hitRec(rec, dmg, dir, power) setState(re
   `__ppg.near('tag'|type|id, dist)`, `__ppg.auto(true)` (bot), `__ppg.state()`, `__ppg.chal()`, `__ppg.floors()`.
 
 ## People: 멘탈 and KO (`ko` challenge)
-Every hit on a person costs 멘탈 (coworkers 3, `boss` / `ceo` / `exec` / `guard` 5; `ctx.npc(…, { mental: n })` overrides):
+Every hit on a person costs 멘탈 (coworkers 3, `boss` / `ceo` / `exec` / `guard` 5, fighters: 보스 8 / 중간보스 6; `ctx.npc(…, { mental: n })` overrides):
 punch 1, kick / ride / heavy swing 2, the special or a flung desk 3. At 0 they go 깨꼬닥 for ~10–14 s (stars, soul puff,
 치료비 / 위자료 on the bill), then sit up and stagger out; they never leave the floor bounds or out-zones and are never removed
 while knocked out. Challenge kind `ko` counts distinct people knocked out: `{ id, text, kind: 'ko', n: 3, bonus }`, or one
-role with `role: 'boss'` (= `type`; key `ko:boss`). Rush adds "부장님 / 사장님 기절시키기" by itself when a floor has a boss and no `ko` goal.
+role with `role: 'boss'` (= `type`; key `ko:boss`). Rush adds "<보스 이름> 기절시키기" by itself when a floor has a boss and no `ko` goal.
+
+## People who fight back (반격) — `js/fight.js`
+Only in a rampage (rush / free / the story's last minute), never in scripted scenes. Per floor (`fight.designate`):
+the **보스** = the `boss` / `ceo` role (멘탈 8), one **중간보스** = the npc with `rank: 'mid'` (`ctx.npc(…, { rank: 'mid' })`),
+else the first `exec` / `guard`, else a standing worker (멘탈 6, KO pays 60,000 위자료), and one random hot-headed worker
+who snaps after the first hit. They square up (`fightIdle`), wind up ≥ 0.75 s ("!" + `windup` sfx + pose), swing with a
+short reach, then pant ~1 s. Two attackers at most; hits during a wind-up cost 멘탈 but don't stop the swing. Names: the player sets 보스 / 중간보스
+names on the title (`ui.names`, `fight.nameOf(n)`); tags, bubbles, money pops, bill lines and the rush goal use them.
