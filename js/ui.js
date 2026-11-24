@@ -20,6 +20,50 @@ if (settings.gender !== 'f') settings.gender = 'm';
 if (settings.storyLen !== 'long') settings.storyLen = 'short';
 function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) { /* 무시 */ } }
 
+/* ---------- 이름 정하기 (보스 · 중간보스 · 내 이름) ----------
+   입력은 글자만: 제어 문자·꺾쇠 빼고, 공백 하나로, 최대 8자. 화면에는 textContent / 캔버스로만 그린다.
+   저장: localStorage 'ppg.names'. 링크(#nb=…&nm=…&np=…)로 받은 이름은 이번 판에만 쓰고, 저장은 [저장]을 눌러야. */
+const NKEY = 'ppg.names';
+const NAME_MAX = 8;
+// invisible / control / direction-override characters and angle brackets are dropped
+const BAD_CP = (c) => c < 32 || (c >= 0x7f && c <= 0x9f) || (c >= 0x200b && c <= 0x200f) || (c >= 0x2028 && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff || c === 60 || c === 62;
+function cleanName(s) {
+  const t = Array.from(String(s == null ? '' : s)).filter((ch) => !BAD_CP(ch.codePointAt(0))).join('').replace(/\s+/g, ' ').trim();
+  return Array.from(t).slice(0, NAME_MAX).join('').trim();
+}
+const names = { boss: '', mid: '', me: '' };
+let namesFromLink = false;
+try {
+  const saved = JSON.parse(localStorage.getItem(NKEY) || 'null');
+  if (saved && typeof saved === 'object') for (const k of Object.keys(names)) if (typeof saved[k] === 'string') names[k] = cleanName(saved[k]);
+} catch (e) { /* 저장소를 못 쓰면 기본값 */ }
+// 친구가 보낸 링크: #nb=김부장&nm=박과장&np=나 (debug 같은 다른 해시 조각과 & 로 함께 올 수 있음)
+(function readNameHash() {
+  const h = (location.hash || '').replace(/^#/, '');
+  if (!/(^|&)n[bmp]=/.test(h)) return;
+  const map = { nb: 'boss', nm: 'mid', np: 'me' };
+  for (const part of h.split('&')) {
+    const i = part.indexOf('='); if (i < 0) continue;
+    const k = map[part.slice(0, i)]; if (!k) continue;
+    let v = part.slice(i + 1, i + 1 + 200);
+    try { v = decodeURIComponent(v.replace(/\+/g, ' ')); } catch (e) { v = ''; }
+    names[k] = cleanName(v); namesFromLink = true;
+  }
+})();
+function saveNames() { try { localStorage.setItem(NKEY, JSON.stringify(names)); } catch (e) { /* 무시 */ } }
+function nameLink() {
+  const q = [['nb', names.boss], ['nm', names.mid], ['np', names.me]].filter(([, v]) => v).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  return location.origin + location.pathname.replace(/tools\/[^/]*$/, '') + (q ? '#' + q : '');
+}
+async function copyText(text) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch (e) { /* 아래 방법으로 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch (e) { return false; }
+}
+
 /* ---------- 터치 기기 판별 ---------- */
 const qs = new URLSearchParams(location.search);
 const mq = (q) => !!(window.matchMedia && matchMedia(q).matches);
@@ -51,7 +95,8 @@ function grab() {
     'joy-knob', 'tbtns', 'subtitle', 'toast', 'banner', 'flash', 'elevator', 'ev-list', 'ev-close', 'title', 't-days',
     't-best', 't-gender', 't-help', 'pause', 'p-resume', 'p-skip', 'p-quit', 'p-title', 'p-keys', 'bill', 'r-co', 'r-meta',
     'r-items', 'r-total', 'r-best', 'r-relief', 'r-relief-bar', 'r-rank', 'r-comment', 'b-retry', 'b-share', 'b-title',
-    'fade', 'f-time', 'f-title', 'f-sub', 'boot', 'hearts']) E[id] = $(id);
+    'fade', 'f-time', 'f-title', 'f-sub', 'boot', 'hearts', 'names', 'n-boss', 'n-mid', 'n-me', 'n-save', 'n-reset', 'n-link',
+    'n-close', 'n-note', 't-names', 't-names-sub']) E[id] = $(id);
   E.stressIn = E.stress && E.stress.querySelector('.s-in b');
   E.promptKey = E.prompt && E.prompt.querySelector('.kc b');
   E.promptText = E.prompt && E.prompt.querySelector('.pt');
@@ -256,6 +301,24 @@ function helpHTML() {
 }
 const PAUSE_KEYS_DESK = [['WASD', '이동'], ['마우스', '시점'], ['SPACE', '점프'], ['좌클릭/Z/J', '때리기'], ['우클릭/X/K', '발차기'], ['C/L/Shift', '막기(꾹)'], ['E', '행동(집기·엎기)'], ['Q', '필살기'], ['ESC/P', '멈춤']];
 const PAUSE_KEYS_TOUCH = [['왼쪽 아래', '끌어서 이동'], ['오른쪽 화면', '끌어서 시점'], ['때리기', '때리기'], ['막기', '꾹 눌러 막기'], ['행동', '집기·엎기'], ['점프', '점프'], ['필살기', '게이지가 차면']];
+function syncNames() {
+  const sub = E['t-names-sub'];
+  if (sub) {
+    const b = names.boss || '부장님', m = names.mid || '과장님';
+    sub.textContent = `${b} · ${m}` + (names.me ? ` · ${names.me}` : '');
+  }
+}
+function openNames(show) {
+  const el = E.names; if (!el) return;
+  if (!show) { el.hidden = true; return; }
+  E['n-boss'].value = names.boss; E['n-mid'].value = names.mid; E['n-me'].value = names.me;
+  E['n-note'].textContent = namesFromLink ? '링크로 받은 이름이에요. [저장]을 누르면 이 기기에 남아요.' : '비워 두면 기본 이름(부장님 · 과장님)을 써요. 최대 8자.';
+  el.hidden = false;
+}
+function readNameFields() {
+  names.boss = cleanName(E['n-boss'].value); names.mid = cleanName(E['n-mid'].value); names.me = cleanName(E['n-me'].value);
+}
+
 /* ---------- 청구서 ---------- */
 const MODE_LABEL = { story: '하루 이야기', rush: '1분 난동', free: '자유 난동' };
 let lastBill = null;
@@ -302,6 +365,28 @@ function bindUI() {
     if (k === 'calm') root.classList.toggle('calm', settings.calm);
     call('setting', k, settings[k]);
   });
+  // 이름 정하기
+  on(E['t-names'], () => openNames(true));
+  on(E['n-close'], () => openNames(false));
+  on(E['n-save'], () => {
+    readNameFields(); saveNames(); namesFromLink = false; syncNames(); openNames(false);
+    ui.toast('이름을 저장했어요', 1600); call('names', Object.assign({}, names));
+  });
+  on(E['n-reset'], () => { E['n-boss'].value = ''; E['n-mid'].value = ''; E['n-me'].value = ''; });
+  on(E['n-link'], async () => {
+    readNameFields(); syncNames(); call('names', Object.assign({}, names));
+    const ok = await copyText(nameLink());
+    ui.toast(ok ? '링크를 복사했어요. 친구도 같은 이름으로 놀아요' : '복사하지 못했어요', 2200);
+  });
+  if (E.names) {
+    // the inputs: max 8 characters as you type (also for pasted text), Enter saves, Esc closes
+    for (const id of ['n-boss', 'n-mid', 'n-me']) {
+      const inp = E[id];
+      inp.addEventListener('input', () => { const c = Array.from(inp.value).slice(0, NAME_MAX).join(''); if (c !== inp.value) inp.value = c; });
+      inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); E['n-save'].click(); } else if (e.key === 'Escape') { e.preventDefault(); openNames(false); } });
+    }
+    E.names.addEventListener('pointerdown', (e) => { if (e.target === E.names) openNames(false); });
+  }
   on(E['p-resume'], () => call('resume'));
   on(E['p-skip'], () => call('skipTask'));
   on(E['p-quit'], () => call('quit'));
@@ -328,6 +413,18 @@ export const ui = {
   joy,
   look,
 
+  // 이름 (main reads these live): boss / mid / me, '' = default
+  names,
+  get namesFromLink() { return namesFromLink; },
+  setNames(o = {}, save = false) {
+    for (const k of Object.keys(names)) if (k in o) names[k] = cleanName(o[k]);
+    if (save) saveNames();
+    syncNames();
+    return Object.assign({}, names);
+  },
+  cleanName,
+  nameLink,
+
   // 기력 (hearts): shown once a fight has started; `hit` shakes the row, `down` greys it out
   hearts(n, max = 5, { show = true, hit = false, down = false } = {}) {
     const el = E.hearts; if (!el) return;
@@ -353,6 +450,7 @@ export const ui = {
     bindUI();
     if (isTouch) bindTouch();
     syncTitleOpts();
+    syncNames();
     E['t-help'].innerHTML = helpHTML();
     const boot = E.boot;
     if (boot && !boot.hidden) {
@@ -364,8 +462,9 @@ export const ui = {
 
   title(show, { best = null, days = 0 } = {}) {
     E.title.hidden = !show;
-    if (!show) return;
+    if (!show) { openNames(false); return; }
     syncTitleOpts();
+    syncNames();
     E['t-help'].innerHTML = helpHTML();
     E['t-best'].textContent = best != null && best > 0 ? `최고 기록 ${fmt(best)}원` : '최고 기록 없음 · 첫 기록을 남겨 보세요';
     const dd = E['t-days'];
@@ -728,7 +827,7 @@ export const ui = {
     E['r-co'].textContent = data.company || '(주)가족같은회사';
     const d = new Date();
     const p2 = (n) => String(n).padStart(2, '0');
-    E['r-meta'].textContent = `${MODE_LABEL[data.mode] || '난동'} · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}` + (data.meta ? ` · ${data.meta}` : '');
+    E['r-meta'].textContent = `${MODE_LABEL[data.mode] || '난동'} · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}` + (data.meta ? ` · ${data.meta}` : '') + (data.who ? ` · 청구 대상 ${data.who}` : '');
     const tb = E['r-items'];
     tb.textContent = '';
     const items = data.items || [], people = data.people || [];

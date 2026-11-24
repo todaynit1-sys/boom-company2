@@ -1993,7 +1993,7 @@ function showBill() {
   const relief = clamp(100 - G.stress, 0, 100);
   after(0.3, () => {
     ui.hud(false);
-    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, people, total, best: prev, isBest, relief, title: rank[1], comment: rank[2], meta });
+    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, people, total, best: prev, isBest, relief, title: rank[1], comment: rank[2], meta, who: (ui.names && ui.names.me) || '' });
     audio.music('bill');
     after(0.5, () => sfx('stamp', { vol: 0.8 }));
     after(0.9, () => sfx(isBest ? 'newRecord' : 'fanfare', { vol: 0.7 }));
@@ -2902,6 +2902,7 @@ if (DEBUG) {
       };
     },
     // ---- 반격 / 막기 / 이름 (tests)
+    names(o, save = false) { if (o) ui.setNames(o, save); return Object.assign({}, ui.names); },
     fight: {
       get api() { return fight; },
       state: () => fight.state(),

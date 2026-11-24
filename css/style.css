@@ -256,7 +256,7 @@ button:focus-visible { outline: 3px solid var(--yel); outline-offset: 2px; }
 .t-interact { right: 6.9rem; bottom: .2rem; width: 4.4rem; height: 4.4rem; background: rgba(255, 255, 255, .92); color: #1b1d26; text-shadow: none; }
 .t-jump { right: .9rem; bottom: 7rem; width: 4.4rem; height: 4.4rem; background: rgba(61, 123, 255, .7); }
 /* 막기: 행동 버튼 왼쪽, 엄지가 때리기에서 옆으로 미끄러지는 자리 (꾹 누르는 동안 막기) */
-.t-guard { right: 11.6rem; bottom: .45rem; width: 4.1rem; height: 4.1rem; background: radial-gradient(circle at 50% 35%, #63e6be, #129b74); border-color: #c9ffec; }
+.t-guard { right: 11.6rem; bottom: .45rem; width: 4.1rem; height: 4.1rem; background: radial-gradient(circle at 50% 35%, #7cf0cc, #1fb386); border-color: #e3fff4; color: #053b2b; text-shadow: none; }
 .t-special { right: 6.2rem; bottom: 5.3rem; width: 4.4rem; height: 4.4rem; overflow: hidden; }
 .t-special::before { content: ""; position: absolute; inset: 0; background: conic-gradient(var(--yel) calc(var(--c, 0) * 360deg), transparent 0); opacity: .75; }
 .t-special::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: rgba(24, 26, 36, .8); }
@@ -352,6 +352,34 @@ button.mbtn:active { transform: scale(.98); }
 .t-help .hi { white-space: nowrap; }
 .ev-btn .fl.long { font-size: 15px; }
 .t-help .kc { font-size: 11px; min-width: 1.6em; height: 1.6em; margin-right: 3px; }
+/* 이름 정하기 (첫 화면 작은 버튼) */
+.nm-btn { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 12px 4px 8px; border-radius: 12px; text-align: left; background: linear-gradient(135deg, rgba(34, 199, 154, .3), rgba(34, 199, 154, .12)); border: 1px solid rgba(70, 230, 180, .6); transition: transform .12s, filter .12s; min-width: 0; }
+.nm-btn::before { content: ""; flex: none; width: 22px; height: 16px; background: var(--yel); -webkit-mask: var(--crown) center / contain no-repeat; mask: var(--crown) center / contain no-repeat; }
+.nm-btn b { flex: none; font-size: 14px; font-weight: 900; }
+.nm-btn small { min-width: 0; font-size: 12px; font-weight: 700; color: rgba(255, 255, 255, .78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nm-btn:hover { filter: brightness(1.12); }
+.nm-btn:active { transform: scale(.98); }
+:root { --crown: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 16'%3E%3Cpath d='M1 4l5 4 5-7 5 7 5-4-2 11H3z'/%3E%3C/svg%3E"); }
+/* 이름 정하기 창 */
+#names { z-index: 70; }
+.n-card { width: min(380px, 100%); max-height: 100%; overflow-y: auto; touch-action: pan-y; box-sizing: border-box; padding: 20px; border-radius: 22px; background: rgba(28, 30, 42, .96); border: 1px solid var(--line); box-shadow: 0 20px 50px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 10px; }
+.n-card h3 { margin: 0 0 4px; font-family: var(--head-font); font-weight: 400; font-size: 30px; color: var(--yel); }
+.n-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: 14px; background: rgba(255, 255, 255, .07); border: 1px solid rgba(255, 255, 255, .14); }
+.n-ic { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; }
+.n-ic::after { content: ""; width: 17px; height: 13px; background: #2a1600; -webkit-mask: var(--crown) center / contain no-repeat; mask: var(--crown) center / contain no-repeat; }
+.n-boss .n-ic { background: radial-gradient(circle at 50% 35%, #ffe680, #ffb81f); }
+.n-mid .n-ic { background: radial-gradient(circle at 50% 35%, #8db4ff, #2f64e0); }
+.n-mid .n-ic::after { width: 14px; height: 14px; background: #fff; -webkit-mask: var(--star) center / contain no-repeat; mask: var(--star) center / contain no-repeat; }
+.n-me .n-ic { background: radial-gradient(circle at 50% 35%, #7ef0c8, #17a57c); }
+.n-me .n-ic::after { width: 13px; height: 13px; background: #0b3d2c; border-radius: 50% 50% 40% 40%; -webkit-mask: none; mask: none; }
+:root { --star: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 19'%3E%3Cpath d='M10 0l3 6.3 7 .9-5.1 4.8 1.3 6.9L10 15.6 3.8 18.9 5.1 12 0 7.2l7-.9z'/%3E%3C/svg%3E"); }
+.n-lbl { flex: none; width: 62px; font-size: 14px; font-weight: 900; }
+.n-row input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; box-sizing: border-box; border-radius: 10px; border: 2px solid rgba(255, 255, 255, .25); background: #fff; color: #1b1d26; font: 700 16px var(--hud-font); user-select: text; -webkit-user-select: text; touch-action: manipulation; pointer-events: auto; }
+.n-row input:focus { outline: none; border-color: var(--yel); box-shadow: 0 0 0 3px rgba(255, 210, 63, .35); }
+.n-row input::placeholder { color: #9a9daa; font-weight: 500; }
+.n-note { margin: 0; font-size: 12.5px; font-weight: 700; color: var(--muted); line-height: 1.45; }
+.n-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.n-btns .btn { min-height: 44px; font-size: 15px; padding: 0 10px; }
 
 /* ---------- 멈춤 ---------- */
 #pause { z-index: 60; }
@@ -491,6 +519,14 @@ button.mbtn:active { transform: scale(.98); }
   .ev-btn .fl { width: 36px; height: 36px; font-size: 16px; }
   .ev-btn { padding: 3px 8px 3px 4px; }
   .ev-btn .tx small { display: none; }
+  .n-card { width: min(560px, 100%); padding: 12px 16px; gap: 6px; }
+  .n-card h3 { font-size: 22px; margin: 0; }
+  .n-row { padding: 3px 6px 3px 8px; }
+  .n-row input { height: 34px; }
+  .n-note { font-size: 11.5px; }
+  .n-btns { grid-template-columns: repeat(4, 1fr); margin-top: 2px; }
+  .n-btns .btn { min-height: 38px; font-size: 14px; }
+  .nm-btn { min-height: 32px; }
   #hearts { height: 1.6rem; }
 }
 
