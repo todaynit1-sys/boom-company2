@@ -26,7 +26,7 @@ export const HIT_LINES = {
   ears: ['귀가!', '으아아!', '시끄러워요!'],
 };
 // 멘탈 per role (spec.mental overrides): coworkers take 3 punches, bosses / security 5
-// (fighters get their own: 보스 8, 중간보스 6 — see fight.js RANK)
+// (fighters get their own: 보스 15, 중간보스 10 — see fight.js RANK)
 export const MENTAL = { boss: 5, ceo: 5, exec: 5, guard: 5 };
 // fighting states (fight.js runs them through ctx.fightTick)
 const FIGHTING = new Set(['ready', 'fight', 'windup', 'swing', 'recover', 'stun', 'taunt']);
@@ -217,6 +217,16 @@ export class NPC {
       if (Math.random() < 0.5) this.say(pick(['안 아파!', '끄떡없어!', '간지러워!', '어림없다!']), 1.0, ctx.now);
       ctx.sfx('yelp', { pitch: rnd(0.75, 0.9), vol: 0.45 });
       return 1;
+    }
+    // 보스·중간보스 shrug off most plain punches (no stun-lock by mashing): only every 3rd (boss) / 2nd (mid) one staggers
+    if (this.fighter && this.fighter.rank !== 'angry' && power < 0.7 && kind !== 'special' && kind !== 'shout' && kind !== 'spray' && !wasSeated && this.fights(ctx)) {
+      this.armorHits = (this.armorHits || 0) + 1;
+      if (this.armorHits % (this.fighter.rank === 'boss' ? 3 : 2) !== 0) {
+        this.squashT = 0; this.char.playOnce('land'); this.char.setFace('rage');
+        if (Math.random() < 0.35) this.say(pick(['안 아파!', '그게 다야?', '어림없다!', '간지러워!']), 1.0, ctx.now);
+        ctx.sfx('yelp', { pitch: rnd(0.7, 0.85), vol: 0.45 });
+        return 1;
+      }
     }
     // still standing: the bubble escalates with what's left
     const left = this.mental;

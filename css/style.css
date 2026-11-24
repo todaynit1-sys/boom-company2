@@ -253,11 +253,14 @@ button:focus-visible { outline: 3px solid var(--yel); outline-offset: 2px; }
 }
 .tbtn.on { transform: scale(.92); filter: brightness(1.25); }
 .t-attack { right: 0; bottom: 0; width: 6.6rem; height: 6.6rem; font-size: 1.35rem; background: radial-gradient(circle at 50% 35%, #ff7a5c, #e2343f); border-color: #ffd0c4; }
-.t-interact { right: 6.9rem; bottom: .2rem; width: 4.4rem; height: 4.4rem; background: rgba(255, 255, 255, .92); color: #1b1d26; text-shadow: none; }
+/* 때리기 둘레로 반원: 발차기·막기는 바로 옆(엄지가 미끄러지는 자리), 행동·필살기는 그 위, 점프는 때리기 위 */
+.t-kick { right: 6.9rem; bottom: .1rem; width: 4.5rem; height: 4.5rem; font-size: .98rem; background: radial-gradient(circle at 50% 35%, #ffb35c, #f07a12); border-color: #ffe2bf; }
+/* 막기: 꾹 누르는 동안 막기 (누르면 주인공 앞에 민트색 방패) */
+.t-guard { right: 11.6rem; bottom: .1rem; width: 4.5rem; height: 4.5rem; background: radial-gradient(circle at 50% 35%, #7cf0cc, #1fb386); border-color: #e3fff4; color: #053b2b; text-shadow: none; }
+.t-guard.on { box-shadow: 0 0 1.1rem rgba(95, 240, 196, .95); }
+.t-interact { right: 6.85rem; bottom: 5.1rem; width: 4.3rem; height: 4.3rem; background: rgba(255, 255, 255, .92); color: #1b1d26; text-shadow: none; }
 .t-jump { right: .9rem; bottom: 7rem; width: 4.4rem; height: 4.4rem; background: rgba(61, 123, 255, .7); }
-/* 막기: 행동 버튼 왼쪽, 엄지가 때리기에서 옆으로 미끄러지는 자리 (꾹 누르는 동안 막기) */
-.t-guard { right: 11.6rem; bottom: .45rem; width: 4.1rem; height: 4.1rem; background: radial-gradient(circle at 50% 35%, #7cf0cc, #1fb386); border-color: #e3fff4; color: #053b2b; text-shadow: none; }
-.t-special { right: 6.2rem; bottom: 5.3rem; width: 4.4rem; height: 4.4rem; overflow: hidden; }
+.t-special { right: 11.2rem; bottom: 5.1rem; width: 4.3rem; height: 4.3rem; overflow: hidden; }
 .t-special::before { content: ""; position: absolute; inset: 0; background: conic-gradient(var(--yel) calc(var(--c, 0) * 360deg), transparent 0); opacity: .75; }
 .t-special::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: rgba(24, 26, 36, .8); }
 .t-special span { position: relative; z-index: 1; }

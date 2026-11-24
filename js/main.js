@@ -167,9 +167,11 @@ document.addEventListener('pointerlockchange', () => {
 function releaseLock() { if (document.pointerLockElement) { IN.releasing = true; try { document.exitPointerLock(); } catch (e) { /* ignore */ } } }
 function onAction(name, down) {
   if (name === 'guard' && !down) { IN.guardTouch = false; return; } // (a release always counts, paused or not)
+  if (name === 'kick' && !down) { IN.kick = false; return; }
   if (!playing()) return;
   if (name === 'attack') { IN.attack = down; if (down) IN.attackQ++; }
   else if (name === 'interact') { IN.interact = down; if (down) IN.interactQ++; G.needRelease = false; }
+  else if (name === 'kick') { IN.kick = down; if (down) IN.kickQ++; }
   else if (name === 'jump') { if (down) IN.jumpQ++; }
   else if (name === 'special') { if (down) IN.specialQ++; }
   else if (name === 'guard') IN.guardTouch = !!down;

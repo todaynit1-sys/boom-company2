@@ -594,7 +594,7 @@ export const ui = {
 
   prompt(p) {
     const el = E.prompt;
-    if (!p) { if (P.vis) { el.hidden = true; P.vis = false; } return; }
+    if (!p) { if (P.vis) { el.hidden = true; P.vis = false; } P.sx = 0; return; }
     if (innerWidth !== vw || innerHeight !== vh) remeasure();
     if (!P.vis) { el.hidden = false; P.vis = true; }
     const text = p.text || '';
@@ -609,7 +609,14 @@ export const ui = {
     }
     if (!P.w) { P.w = el.offsetWidth; P.h = el.offsetHeight; }
     const x = clamp(p.x - P.w / 2, 6, vw - P.w - 6), y = clamp(p.y - P.h / 2, 6, vh - P.h - 6);
-    const tx = `translate3d(${x | 0}px,${y | 0}px,0)`;
+    // follow the object smoothly: the raw screen point shivers while walking (camera lag + step rounding),
+    // so ease toward it, snap when it first shows or jumps to another object, and ignore 1–2 px wobble
+    const now = performance.now();
+    const dtp = Math.min(0.1, Math.max(0, (now - (P.t || now)) / 1000)); P.t = now;
+    if (!P.sx || Math.hypot(x - P.sx, y - P.sy) > 160) { P.sx = x; P.sy = y; }
+    else { const k = 1 - Math.exp(-dtp * 10); P.sx += (x - P.sx) * k; P.sy += (y - P.sy) * k; }
+    if (Math.abs(P.sx - (P.rx || 0)) >= 1.5 || Math.abs(P.sy - (P.ry || 0)) >= 1.5) { P.rx = Math.round(P.sx); P.ry = Math.round(P.sy); }
+    const tx = `translate3d(${P.rx}px,${P.ry}px,0)`;
     if (tx !== P.tx) { el.style.transform = tx; P.tx = tx; }
   },
 

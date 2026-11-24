@@ -26,16 +26,17 @@ function wrapA(a) { while (a > PI) a -= 2 * PI; while (a < -PI) a += 2 * PI; ret
 function angLerp(a, b, k) { return a + wrapA(b - a) * Math.min(1, k); }
 
 export const FIGHT_STATES = new Set(['ready', 'fight', 'windup', 'swing', 'recover', 'stun', 'taunt']);
-// tuning ("웬만하면 우리가 이기게": slow, loud wind-ups, long recoveries, one heart per hit, two attackers at most)
+// tuning (raised 2026-11-24 "너무 약하다": faster wind-ups, combos, boss hits for 2 hearts; still no game over, two attackers at most)
 export const TUNE = {
-  hearts: 5, invuln: 1.0, regenDelay: 4.0, regenEvery: 2.2, flop: 2.0, getUp: 0.75, upInvuln: 1.5,
+  hearts: 5, invuln: 0.6, regenDelay: 6.0, regenEvery: 3.0, flop: 2.0, getUp: 0.75, upInvuln: 1.5,
   perfect: 0.25, stun: 1.5, maxAttackers: 2, aggro: 3.4, leash: 10, guardSpeed: 0.45, perfectPay: 5000,
   hover: 2.3,
 };
 export const RANK = {
-  boss: { mental: 8, speed: 2.25, windup: 0.9, reach: 1.45, recover: 1.15, cool: [1.1, 1.9], throw: true },
-  mid: { mental: 6, speed: 2.45, windup: 0.8, reach: 1.4, recover: 1.0, cool: [0.9, 1.7] },
-  angry: { mental: null, speed: 2.5, windup: 0.75, reach: 1.35, recover: 1.0, cool: [1.3, 2.3] },
+  // dmg = hearts per clean hit; combo = chance of a quick follow-up swing (comboWind = its short wind-up)
+  boss: { mental: 15, speed: 2.95, windup: 0.62, reach: 1.6, recover: 0.7, cool: [0.45, 1.0], throw: 0.95, dmg: 2, combo: 0.5, comboWind: 0.34 },
+  mid: { mental: 10, speed: 2.9, windup: 0.6, reach: 1.5, recover: 0.75, cool: [0.55, 1.15], dmg: 1, combo: 0.35, comboWind: 0.36 },
+  angry: { mental: null, speed: 2.7, windup: 0.62, reach: 1.4, recover: 0.85, cool: [0.9, 1.6], dmg: 1, combo: 0 },
 };
 // bubbles ({B} boss name, {M} mid-boss name, {P} the player's name)
 const LINES = {
@@ -186,7 +187,7 @@ export function createFight(D) {
         if (d > TUNE.leash) { n.far = (n.far || 0) + dt; if (n.far > 2) { n.far = 0; enter(n, 'ready'); n.path = null; break; } } else n.far = 0;
         const canAtk = !G.busy && !n.aiHold && n.cool <= 0 && FT.attackers < TUNE.maxAttackers && FT.invuln <= 0.15 && P.y < 0.6;
         // 보스: a slipper from mid range now and then (line of sight only)
-        if (canAtk && R.throw && d > 3.0 && d < 7.5 && Math.random() < dt * 0.55 && clearLine(n.pos, P.pos)) { startWindup(n, 'throw'); FT.attackers++; break; }
+        if (canAtk && R.throw && d > 3.0 && d < 7.5 && Math.random() < dt * R.throw && clearLine(n.pos, P.pos)) { startWindup(n, 'throw'); FT.attackers++; break; }
         const want = canAtk ? R.reach * 0.78 : TUNE.hover + (n.fighter.rank === 'angry' ? 0.4 : 0);
         if (d > want + 0.2) sp = walkToward(n, P.pos.x, P.pos.z, R.speed * (canAtk ? 1 : 0.75), dt, ctx);
         else if (!canAtk && d < want - 0.6) {
@@ -201,7 +202,8 @@ export function createFight(D) {
       case 'windup': {
         // slow turn while rearing back: you can step out of the way
         n.yaw = angLerp(n.yaw, toYaw, dt * (n.atk === 'throw' ? 5 : 2.4));
-        if (n.t >= R.windup) {
+        if (n.t >= (n.wlen || R.windup)) {
+          n.wlen = 0;
           if (n.atk === 'throw') { throwSlipper(n); enter(n, 'recover'); n.recLen = 0.8; c.setAnim('fightIdle'); }
           else { enter(n, 'swing'); c.setAnim('fightIdle'); c.playOnce('punch'); D.sfx('whooshPunch', { vol: 0.55, pitch: 0.85 }); }
         }
@@ -212,7 +214,11 @@ export function createFight(D) {
         const v = 3.0 * Math.max(0, 1 - n.t / 0.25);
         slide(n, Math.sin(n.yaw) * v, Math.cos(n.yaw) * v, dt, ctx); sp = v;
         if (!n.swung && n.t >= 0.08) { n.swung = true; melee(n, R); }
-        if (n.t >= 0.3) { enter(n, 'recover'); n.recLen = R.recover; c.setAnim('pant'); c.setFace('sleepy'); }
+        if (n.t >= 0.3 && !n.comboed && R.combo && Math.random() < R.combo && d < R.reach * 1.7 && !G.busy) {
+          // a quick second swing ("one more!") — shorter wind-up, still telegraphed
+          n.comboed = true; startWindup(n, 'melee'); n.wlen = R.comboWind; break;
+        }
+        if (n.t >= 0.3) { n.comboed = false; enter(n, 'recover'); n.recLen = R.recover; c.setAnim('pant'); c.setFace('sleepy'); }
         break;
       }
       case 'recover': {
@@ -250,7 +256,7 @@ export function createFight(D) {
   }
   function stun(n) {
     if (!n || n.gone || n.isKo) return;
-    enter(n, 'stun'); n.path = null;
+    enter(n, 'stun'); n.path = null; n.comboed = false; n.wlen = 0;
     n.char.setAnim('dizzy'); n.char.setFace('dizzy');
     n.starsOn = true; n.starSize = n.sc * 0.75; n.anchors();
     D.fx.koStars(n);
@@ -285,7 +291,8 @@ export function createFight(D) {
       return perfect ? 'perfect' : 'block';
     }
     // unguarded: one heart, a flinch + a hop back, combo broken, a second of blinking invulnerability
-    FT.hearts = Math.max(0, FT.hearts - 1); FT.invuln = TUNE.invuln; FT.lastHit = G.rtime; FT.regenT = 0; FT.hitsTaken++;
+    const dmg = (src && src.fighter && RANK[src.fighter.rank] && RANK[src.fighter.rank].dmg) || 1;
+    FT.hearts = Math.max(0, FT.hearts - dmg); FT.invuln = TUNE.invuln; FT.lastHit = G.rtime; FT.regenT = 0; FT.hitsTaken++;
     FT.kb.set(dir.x * 4.2, 0, dir.z * 4.2);
     if (P.onGround) { P.vy = 2.4; P.onGround = false; }
     P.char.playOnce('land'); D.setFace('shock', 0.9);
@@ -522,7 +529,34 @@ export function createFight(D) {
   }
   let fontsOk = 0;
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { fontsOk++; });
+  // 막기 shield: a see-through mint dome in front of the player, so guarding reads from the camera behind too
+  let shield = null;
+  function updateShield() {
+    const g = P.char && P.char.group;
+    if (!g) return;
+    if (!shield) {
+      shield = new THREE.Mesh(
+        new THREE.SphereGeometry(0.62, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.42),
+        new THREE.MeshBasicMaterial({ color: 0x5ff0c4, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      shield.rotation.x = Math.PI / 2; // dome opens toward the player, faces forward (+z)
+      shield.position.set(0, 1.0, -0.12);
+      shield.renderOrder = 5; shield.visible = false;
+      g.add(shield);
+    }
+    if (shield.parent !== g) g.add(shield);
+    const on = FT.guard && !down();
+    shield.visible = on;
+    if (on) {
+      const fresh = G.rtime - FT.guardT0;
+      const pop = fresh < 0.12 ? 0.75 + fresh / 0.12 * 0.25 : 1;
+      const perfectWin = fresh <= TUNE.perfect; // brighter during the 딱! window
+      shield.scale.setScalar(pop / (g.scale.x || 1));
+      shield.material.opacity = perfectWin ? 0.55 : 0.32 + Math.sin(G.rtime * 9) * 0.04;
+    }
+  }
   function frame() {
+    updateShield();
     const S = G.S;
     const show = !!S && G.rampage && G.mode !== 'title';
     if (S) for (const n of S.npcs) {

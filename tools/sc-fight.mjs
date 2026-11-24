@@ -165,8 +165,8 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     const m0 = (await st()).money;
     await ev('__ppg.sfxLog(true)');
     await ev(`__ppg.fight.attack(${bi})`);
-    // wait until ~0.12 s before the swing lands (wind-up 0.9 s + 0.08 s), then press C
-    await stepUntil(`__ppg.npc(${bi}).t >= 0.84`, 120, 1);
+    // wait until ~0.12 s before the swing lands (wind-up from RANK + 0.08 s), then press C
+    await stepUntil(`__ppg.npc(${bi}).t >= __ppg.fight.tune().RANK.boss.windup - 0.06`, 120, 1);
     await I.down('KeyC');
     await stepUntil(`__ppg.npc(${bi}).state === "stun"`, 60, 1);
     await step(6);
@@ -185,7 +185,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     expect(t / 60 > 1.1 && t / 60 < 1.8, `stun lasts ~1.5 s (${((t + 8) / 60).toFixed(2)} s)`);
   }
 
-  // ---------------------------------------------------------------- C: an unguarded hit costs exactly one heart + ~1 s invulnerability
+  // ---------------------------------------------------------------- C: an unguarded 보스 hit costs two hearts + a short invulnerability
   if (parts.includes('c')) {
     await fresh();
     const bi = await idx('boss');
@@ -196,12 +196,12 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     await stepUntil('__ppg.fight.state().hitsTaken > 0', 120, 2);
     let f = await fst();
     await shot('fc-0-hit');
-    expect(f.hearts === 4 && f.invuln > 0.7, `one heart lost (hearts ${f.hearts}), invulnerable ${f.invuln}s`);
+    expect(f.hearts === 3 && f.invuln > 0.4, `two hearts lost (hearts ${f.hearts}), invulnerable ${f.invuln}s`);
     const again = await ev(`__ppg.fight.hitPlayer(${bi})`);
     f = await fst();
-    expect(again === 'none' && f.hearts === 4, `a second blow during invulnerability does nothing (${again}, hearts ${f.hearts})`);
+    expect(again === "none" && f.hearts === 3, `a second blow during invulnerability does nothing (${again}, hearts ${f.hearts})`);
     expect((await ev('__ppg.sfxLog()')).some((e) => e.n === 'hurt'), 'hurt sfx');
-    expect(!(await ev('document.getElementById("hearts").hidden')) && (await ev('document.querySelectorAll("#hearts i.on").length')) === 4, 'HUD shows 4 hearts');
+    expect(!(await ev('document.getElementById("hearts").hidden')) && (await ev('document.querySelectorAll("#hearts i.on").length')) === 3, 'HUD shows 3 hearts');
     await step(70);
     f = await fst();
     expect(f.invuln === 0, 'invulnerability ends after ~1 s');
@@ -210,7 +210,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     expect((await st()).combo === 0, 'combo reset');
     // hearts refill when left alone
     await ev(`__ppg.tp(0, 0)`);
-    await step(60 * 7);
+    await step(60 * 14);
     f = await fst();
     expect(f.hearts === 5, `기력 refills after a few quiet seconds (${f.hearts})`);
   }
@@ -364,7 +364,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     await face();
     await ev(`__ppg.fight.attack(${bi}, "throw")`); await step(130);
     f = await fst();
-    expect(f.hitsTaken === 1 && f.hearts === 4, `standing still the slipper hits (hearts ${f.hearts})`);
+    expect(f.hitsTaken === 1 && f.hearts === 3, `standing still the slipper hits (hearts ${f.hearts})`);
     await step(80);
     // guard (held early) blocks it
     await face();
@@ -408,7 +408,7 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
       const hit = (p, h) => p.left < h.right && p.right > h.left && p.top < h.bottom && p.bottom > h.top;
       const hits = [];
       for (const [a, p] of pads) for (const [b, h] of hud) if (hit(p, h)) hits.push(a + '×' + b);
-      for (let i = 0; i < pads.length; i++) for (let j = i + 1; j < pads.length; j++) if ((/t-guard/.test(pads[i][0]) || /t-guard/.test(pads[j][0])) && hit(pads[i][1], pads[j][1])) hits.push(pads[i][0] + '×' + pads[j][0]);
+      for (let i = 0; i < pads.length; i++) for (let j = i + 1; j < pads.length; j++) if (hit(pads[i][1], pads[j][1])) hits.push(pads[i][0] + '×' + pads[j][0]);
       const off = pads.filter(([a, p]) => p.left < 0 || p.top < 0 || p.right > innerWidth || p.bottom > innerHeight).map(([a]) => a);
       const hh = [...hud].filter(([a]) => a === 'hearts').map(([a, h]) => h)[0];
       const hudHits = [];
@@ -425,14 +425,24 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     let f = await fst();
     const anim = await ev('__ppg.P.char.anim');
     expect(f.guard && anim === 'guard', `holding 막기 guards (pose ${anim})`);
+    const shieldOn = () => ev('__ppg.P.char.group.children.some((c) => c.isMesh && c.visible && c.material && c.material.color && c.material.color.getHex() === 0x5ff0c4)');
+    expect(await shieldOn(), 'mint shield shows while guarding');
     await shot(`ft-${tag}-2-guard`);
     const b0 = f.blocks;
     await ev(`__ppg.fight.attack(${bi})`); await stepUntil(`__ppg.npc(${bi}).state === "recover"`, 120, 2);
     f = await fst();
-    expect(f.blocks === b0 + 1 && f.hearts >= 4, `blocked with the touch guard (blocks ${f.blocks})`);
+    expect(f.blocks >= b0 + 1 && f.hearts >= 3, `blocked with the touch guard (blocks ${f.blocks})`);
     await I.touch('touchEnd', []);
     await step(4);
     expect(!(await fst()).guard, 'lifting the finger drops the guard');
+    expect(!(await shieldOn()), 'shield gone after release');
+    // 발차기 button: a real tap kicks
+    const kb = await I.rect('.t-kick');
+    expect(kb && kb.w >= 40, '발차기 button on the pad ' + JSON.stringify(kb));
+    await ev('__ppg.sfxLog(true)');
+    await I.touch('touchStart', [{ x: kb.x, y: kb.y, id: 5 }]); await step(3); await I.touch('touchEnd', []); await step(20);
+    const ks = (await ev('__ppg.sfxLog()')).map((e) => e.n);
+    expect(ks.includes('whooshKick'), 'tapping 발차기 kicks (' + ks.join(',') + ')');
     await shot(`ft-${tag}-3-play`);
   }
 
