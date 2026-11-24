@@ -12,9 +12,11 @@ import { collideCircle, NavGrid, pointInRect } from './nav.js';
 import { NPC } from './npc.js';
 import { instanceFloor } from './inst.js';
 import { createToys, WEAPON, RIDE } from './toys.js';
+import { createFight } from './fight.js';
 
 const PI = Math.PI;
-const DEBUG = /debug/.test(location.hash);
+// #debug (may share the hash with a name link: #debug&nb=…)
+const DEBUG = /(^#|&)debug(&|$)/.test(location.hash);
 const TOUCH = ui.isTouch;
 const FIXED = 1 / 60;
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -36,6 +38,7 @@ const G = {
   fcounts: {}, chal: {}, run: null, evSel: null, thrust: 0,
 };
 let toys = null; // js/toys.js — created once the game helpers below exist
+let fight = null; // js/fight.js — 반격 · 막기 · 기력 (created with toys)
 const save = loadSave();
 function loadSave() {
   try { const s = JSON.parse(localStorage.getItem('ppg.save') || 'null'); if (s && typeof s === 'object') return { best: Object.assign({}, s.best || {}), days: s.days | 0 }; } catch (e) { /* ignore */ }
@@ -85,8 +88,10 @@ audio.setEnabled({ sfx: !!ui.settings.sfx, bgm: !!ui.settings.bgm });
 
 // ================================================================ input
 const keys = new Set();
-const IN = { attack: false, kick: false, interact: false, interactQ: 0, jumpQ: 0, specialQ: 0, attackQ: 0, kickQ: 0, lookDX: 0, lookDY: 0, drag: false, lastX: 0, lastY: 0, locked: false, wantLock: false, releasing: false, lockLostAt: -1e9 };
-const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'KeyJ', 'KeyK', 'KeyQ', 'KeyF', 'KeyZ', 'KeyX']);
+const IN = { guard: false, guardTouch: false, attack: false, kick: false, interact: false, interactQ: 0, jumpQ: 0, specialQ: 0, attackQ: 0, kickQ: 0, lookDX: 0, lookDY: 0, drag: false, lastX: 0, lastY: 0, locked: false, wantLock: false, releasing: false, lockLostAt: -1e9 };
+const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'KeyJ', 'KeyK', 'KeyQ', 'KeyF', 'KeyZ', 'KeyX', 'KeyC', 'KeyL', 'ShiftLeft', 'ShiftRight']);
+const GUARD_KEYS = ['KeyC', 'KeyL', 'ShiftLeft', 'ShiftRight'];
+const guardKeyDown = () => GUARD_KEYS.some((k) => keys.has(k));
 function playing() { return (G.mode !== 'title') && G.scene !== 'bill' && !G.paused; }
 addEventListener('keydown', (e) => {
   if (e.target && e.target.closest && e.target.closest('input,textarea')) return;
@@ -115,15 +120,17 @@ addEventListener('keydown', (e) => {
     if (c === 'KeyJ' || c === 'KeyF' || c === 'KeyZ') { IN.attack = true; IN.attackQ++; }
     if (c === 'KeyK' || c === 'KeyX') { IN.kick = true; IN.kickQ++; }
     if (c === 'KeyE') { IN.interact = true; IN.interactQ++; G.needRelease = false; }
+    if (GUARD_KEYS.includes(c)) IN.guard = true;
   }
 });
 addEventListener('keyup', (e) => {
   const c = e.code; keys.delete(c);
+  if (GUARD_KEYS.includes(c)) IN.guard = guardKeyDown();
   if (c === 'KeyJ' || c === 'KeyF' || c === 'KeyZ') IN.attack = keys.has('KeyJ') || keys.has('KeyF') || keys.has('KeyZ');
   if (c === 'KeyK' || c === 'KeyX') IN.kick = keys.has('KeyK') || keys.has('KeyX');
   if (c === 'KeyE') { IN.interact = false; G.needRelease = false; }
 });
-function clearInput() { keys.clear(); IN.attack = IN.kick = IN.interact = false; IN.drag = false; IN.attackQ = IN.kickQ = IN.jumpQ = IN.specialQ = IN.interactQ = 0; G.needRelease = false; }
+function clearInput() { keys.clear(); IN.attack = IN.kick = IN.interact = IN.guard = IN.guardTouch = false; IN.drag = false; IN.attackQ = IN.kickQ = IN.jumpQ = IN.specialQ = IN.interactQ = 0; G.needRelease = false; }
 addEventListener('blur', clearInput);
 // tab hidden: drop held keys (their keyup never arrives) and pause a running game
 document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); if (playing() && !G.manual) togglePause(true); } });
@@ -159,11 +166,13 @@ document.addEventListener('pointerlockchange', () => {
 });
 function releaseLock() { if (document.pointerLockElement) { IN.releasing = true; try { document.exitPointerLock(); } catch (e) { /* ignore */ } } }
 function onAction(name, down) {
+  if (name === 'guard' && !down) { IN.guardTouch = false; return; } // (a release always counts, paused or not)
   if (!playing()) return;
   if (name === 'attack') { IN.attack = down; if (down) IN.attackQ++; }
   else if (name === 'interact') { IN.interact = down; if (down) IN.interactQ++; G.needRelease = false; }
   else if (name === 'jump') { if (down) IN.jumpQ++; }
   else if (name === 'special') { if (down) IN.specialQ++; }
+  else if (name === 'guard') IN.guardTouch = !!down;
 }
 function moveInput() {
   let x = 0, y = 0;
@@ -242,6 +251,7 @@ function resetPlayer() {
   dropCarry();
   if (P.held) { const r = P.held; P.held = null; if (r.group.parent) r.group.parent.remove(r.group); r.removed = true; }
   P.seated = null; P.vel.set(0, 0, 0); P.vy = 0; P.y = 0; P.onGround = true; P.controls = true; P.rage = false; P.attackT = 0; P.push = null;
+  if (fight) fight.reset();
   P.char.setAnim('idle'); setFace('normal');
   P.char.group.rotation.x = 0;
 }
@@ -262,6 +272,7 @@ function getFloor(kind) {
   const S = { kind, F, phys, npcs: [], walkers: [], nav: null, obst: [], lists: null, navT: 0, touched: false, used: G.mode !== 'title', buildMs: 0, ropes: [] };
   S.lists = [F.rects, S.obst];
   for (const sp of F.npcs) { const n = new NPC(sp); S.npcs.push(n); F.group.add(n.group); }
+  fight.designate(S); // 보스 · 중간보스 (+ one hot-headed coworker) fight back in a rampage
   for (const w of F.walkers) {
     const n = new NPC({ preset: w.preset, x: w.x, z: w.z, rotY: PI / 2, anim: 'walk', role: 'walker', variantSeed: w.variantSeed, id: kind + ':w' + S.walkers.length, speed: w.speed, x0: w.x0, x1: w.x1 });
     n.state = 'stroll'; n.dir = w.dir; n.char.setAnim('walk');
@@ -502,7 +513,7 @@ function hudStory() {
 }
 function hudRampage(label = '피해 총액') {
   ui.hud(true);
-  ui.keys([{ k: 'WASD', t: '이동' }, { k: 'SPACE', t: '점프' }, { k: 'Z·클릭', t: '때리기' }, { k: 'X', t: '발차기' }, { k: 'E', t: '엎기·집기' }, { k: 'Q', t: '필살기' }]);
+  ui.keys([{ k: 'WASD', t: '이동' }, { k: 'SPACE', t: '점프' }, { k: 'Z·클릭', t: '때리기' }, { k: 'X', t: '발차기' }, { k: 'C', t: '막기' }, { k: 'E', t: '엎기·집기' }, { k: 'Q', t: '필살기' }]);
   ui.money(G.money, label); ui.special(G.special);
 }
 function setStress(v, pulse = true) {
@@ -1204,7 +1215,7 @@ function initTasks(kind) {
     // rush: a bonus goal for knocking out the floor's boss (부장님 / 사장님), when there is one and no KO goal yet
     const FS = G.floors[kind] || G.S;
     const boss = G.mode === 'rush' && FS && FS.npcs.find((n) => n.role === 'boss' && !n.gone);
-    if (boss && !src.some((t) => t.kind === 'ko')) src = src.concat([{ id: 'koBoss', text: boss.spec.name === 'ceo' ? '사장님 기절시키기' : '부장님 기절시키기', kind: 'ko', role: 'boss', bonus: 60000 }]);
+    if (boss && !src.some((t) => t.kind === 'ko')) src = src.concat([{ id: 'koBoss', text: `${fight.nameOf(boss) || (boss.spec.name === 'ceo' ? '사장님' : '부장님')} 기절시키기`, kind: 'ko', role: 'boss', bonus: 60000 }]);
     // bonuses in proportion to the bill: a floor's six together pay at most CHAL_BONUS_TOTAL
     const sum = src.reduce((a, t) => a + (t.bonus || 0), 0), bk = sum > CHAL_BONUS_TOTAL ? CHAL_BONUS_TOTAL / sum : 1;
     let pool = src.map((t) => Object.assign({ done: false, doneAt: 0, need: t.n || 1, key: chalKey(t) }, t, { key: chalKey(t), bonus: Math.round((t.bonus || 0) * bk / 1000) * 1000 }));
@@ -1507,6 +1518,7 @@ function pickTarget(range, includeNpc = true) {
 function aimAt(p) { P.yaw = Math.atan2(p.x - P.pos.x, p.z - P.pos.z); }
 function attack(kind) {
   if (P.attackT > 0 || P.seated || G.busy || !P.controls && G.rampage === false) return;
+  if (!fight.canAttack()) return; // guarding (arms up) / flat on the floor
   if (G.canDamage && toys.attack(kind)) return; // riding (forklift fork) or swinging a held weapon
   if (P.held) { throwHeld(); return; }
   if (P.carryNpc) { if (G.canDamage) releaseNpc(true); return; }
@@ -1556,9 +1568,12 @@ const PERSON_HIT = {
   domino: [0.8, 1], blast: [1.2, 2], shout: [0.35, 1], spray: [0.3, 1], knock: [1.0, 1],
 };
 // KO pay: a coworker ≈ a mid-size prop (치료비), the boss / CEO a jackpot (위자료); a repeat KO of the same person pays ¼
-const KO_PAY = { worker: 20000, guard: 40000, exec: 40000, boss: 120000, ceo: 120000 };
-function koPayOf(n) { return KO_PAY[n.role] || KO_PAY.worker; }
+const KO_PAY = { worker: 20000, guard: 40000, exec: 40000, boss: 120000, ceo: 120000, mid: 60000 };
+function koPayOf(n) { return n.fighter && n.fighter.rank === 'mid' ? KO_PAY.mid : KO_PAY[n.role] || KO_PAY.worker; }
+// 보스 / 중간보스 lines carry their (player-chosen) names: "김부장 기절 — 위자료"
+function koLabel(n) { return n.fighter && (n.fighter.rank === 'boss' || n.fighter.rank === 'mid') ? fight.nameOf(n) + ' 위자료' : n.role === 'boss' || n.role === 'ceo' || n.role === 'exec' ? '위자료' : '치료비'; }
 function koBillLine(n) {
+  if (n.fighter && (n.fighter.rank === 'boss' || n.fighter.rank === 'mid')) return fight.nameOf(n) + ' 기절 — 위자료';
   if (n.role === 'ceo' || n.spec.name === 'ceo') return '사장님 기절 — 위자료';
   if (n.role === 'boss') return '부장님 기절 — 위자료';
   if (n.role === 'exec') return '기절시킨 임원 — 위자료';
@@ -1574,6 +1589,7 @@ function hitPerson(n, dir, kind = 'punch', o = {}) {
   const chair = n.seated && n.seat && n.seat.chair && n.seat.chair.rec;
   const r = n.hit(npcCtx(), dir, power, dmg, kind);
   if (!r) return 0;
+  if (r === 1 && n.hothead) fight.anger(n); // "참을 만큼 참았어요!" — this one fights back from now on
   const direct = !!o.direct, soft = kind === 'shout' || kind === 'spray';
   // knocked off the chair: the chair skids away too
   if (chair && !chair.removed && !soft) hitRec(chair, 0, dir, 1.3, { shake: false, vol: 0.5 });
@@ -1638,7 +1654,7 @@ function npcKo(n, phase) {
     const first = n.koCount === 1, full = koPayOf(n), amt = first ? full : Math.round(full / 4000) * 1000;
     if (G.canDamage && amt > 0) {
       n.anchors();
-      addMoney(amt, _hp.set(n.head.x, n.head.y + 0.6, n.head.z), false, true, n.role === 'boss' || n.role === 'ceo' || n.role === 'exec' ? '위자료' : '치료비');
+      addMoney(amt, _hp.set(n.head.x, n.head.y + 0.6, n.head.z), false, true, koLabel(n));
       addItem(koBillLine(n), amt, true);
       bumpCombo();
     }
@@ -1851,7 +1867,7 @@ function throwAim(o, f) {
   return best;
 }
 function special() {
-  if (!G.canDamage || P.seated) return;
+  if (!G.canDamage || P.seated || !fight.canAttack()) return;
   if (toys.special()) return; // megaphone: Q shouts
   if (G.special < 1) return;
   G.special = 0; G.specialReadyShown = false; ui.special(0);
@@ -1954,6 +1970,7 @@ function showBill() {
   G.scene = 'bill'; G.rampage = false; G.canDamage = false; G.timeLeft = null; G.homeWalk = null;
   ui.prompt(null); ui.timer(null); ui.combo(0); ui.elevator(null); ui.vignette(0); ui.subtitle(null, null);
   gfx.clearHighlight(); objective(null);
+  fight.stop(); fight.hud(); ui.bubble('player', null); G.pBubble = false;
   releaseLock();
   const all = [...G.items.values()].sort((a, b) => b.amount - a.amount);
   const items = all.filter((it) => !it.people), people = all.filter((it) => it.people); // people: own bill section
@@ -1985,11 +2002,12 @@ function showBill() {
   P.rage = false;
   setFace(total > 0 ? 'relief' : 'normal');
   P.char.setAnim(total > 0 ? 'cheer' : 'idle');
-  G.lastBill = { mode: G.mode, items: items.length, people: people.map((it) => ({ name: it.name, count: it.count, amount: it.amount })), total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null };
+  G.lastBill = { mode: G.mode, items: items.length, people: people.map((it) => ({ name: it.name, count: it.count, amount: it.amount })), total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null, fight: fight.state() };
 }
 function runTimersNow() { /* timers run on the next ticks; nothing to force */ }
 function endRampage() {
   G.rampage = false; G.canDamage = false;
+  fight.stop();
   ui.timer(0);
   sfx('whistle', { vol: 0.9 });
   G.slowT = 1.3; G.slowScale = 0.3;
@@ -2137,7 +2155,7 @@ function routeTo(dest) {
 let _ctx = null;
 const _head = V();
 function npcCtx() {
-  if (!_ctx) _ctx = { sfx, pickExit, pickHide, keepIn: keepNpcIn, groundAt: npcGround, onLand: npcLand, onKo: npcKo };
+  if (!_ctx) _ctx = { sfx, pickExit, pickHide, keepIn: keepNpcIn, groundAt: npcGround, onLand: npcLand, onKo: npcKo, fightOn: () => fight.on(), fightTick: (n, dt, c) => fight.npcTick(n, dt, c), onFight: (n, ev) => fight.onFight(n, ev) };
   const S = G.S;
   _ctx.nav = S ? S.nav : null;
   _ctx.lists = S ? S.lists : [];
@@ -2192,6 +2210,11 @@ function updatePlayer(dt) {
     }
   }
   if (!P.controls || G.busy) { mx = 0; mz = 0; }
+  // 막기 (hold C / L / Shift / the 막기 button): arms up, slow walk, no swings; flat on the floor: no moving at all
+  const guardWant = IN.guard || IN.guardTouch || !!(_bot && _bot.on && _bot.guard);
+  const canGuard = P.controls && !G.busy && !toys.riding() && !P.carry && !(P.held && P.heldBoth) && G.mode !== 'title' && G.scene !== 'bill';
+  fight.setGuard(guardWant, canGuard);
+  const ms = fight.moveScale(); mx *= ms; mz *= ms;
   // the rampage ended in the lobby / outside: walk home (퇴근!) under the final banner
   if (G.homeWalk && !G.busy) { mx = G.homeWalk.x * 0.5; mz = G.homeWalk.z * 0.5; }
   // just arrived by elevator: walk out of the car on your own; any move input after a moment takes over
@@ -2236,10 +2259,16 @@ function updatePlayer(dt) {
   const realV = Math.hypot(P.pos.x - P.prev.x, P.pos.z - P.prev.z) / Math.max(dt, 1e-4);
   P.speed = Math.min(realV, Math.hypot(P.vel.x, P.vel.z));
   if (P.speed > 0.25 && (mx || mz)) P.yaw = angLerp(P.yaw, Math.atan2(P.vel.x, P.vel.z), dt * 12);
+  // guarding: turn to face whoever is winding up close by (so a block works from any side)
+  if (fight.FT.guard) {
+    let best = null, bd = 4;
+    for (const n of S.npcs) { if (!n.fighter || n.gone || (n.state !== 'windup' && n.state !== 'swing')) continue; const d = n.pos.distanceTo(P.pos); if (d < bd) { bd = d; best = n; } }
+    if (best) P.yaw = angLerp(P.yaw, Math.atan2(best.pos.x - P.pos.x, best.pos.z - P.pos.z), dt * 12);
+  }
   // jump / gravity
   if (IN.jumpQ > 0) {
     IN.jumpQ = 0;
-    if (P.onGround && P.controls && !G.busy && !P.carry) { P.vy = 6.0; P.onGround = false; c.playOnce('jump'); sfx('jump', { vol: 0.45 }); }
+    if (P.onGround && P.controls && !G.busy && !P.carry && !fight.playerDown()) { P.vy = 6.0; P.onGround = false; c.playOnce('jump'); sfx('jump', { vol: 0.45 }); }
   }
   if (G.thrust > 0) { P.onGround = false; P.vy = Math.min(Math.max(P.vy, G.thrustMax), P.vy + G.thrust * dt); }
   // raised walkable floors (ctx.ground): only floors that declare them; others keep y = 0 (and their own hooks)
@@ -2258,6 +2287,8 @@ function updatePlayer(dt) {
   else if (P.speed > 3.2) anim = 'run';
   else if (P.speed > 0.15) anim = 'walk';
   else anim = G.scene === 'bill' && G.money > 0 ? 'cheer' : P.rage ? 'rageIdle' : 'idle';
+  const fa = fight.playerAnim(); // guard / flat out / getting up
+  if (fa && !(fa === 'guard' && (P.carry || (P.held && P.heldBoth)))) anim = fa;
   if (c.anim !== anim) c.setAnim(anim);
   c.update(dt, P.speed);
   // footsteps
@@ -2289,7 +2320,7 @@ function keepIn() {
 // ---- interaction focus + prompt
 function updateInteract(dt) {
   let cand = null;
-  if (G.mode !== 'title' && G.scene !== 'bill' && !G.busy && !P.seated && P.controls) {
+  if (G.mode !== 'title' && G.scene !== 'bill' && !G.busy && !P.seated && P.controls && !fight.playerDown()) {
     if (G.cand) {
       const c = G.cand;
       const d = Math.hypot(c.pos.x - P.pos.x, c.pos.z - P.pos.z);
@@ -2350,6 +2381,7 @@ function tick(dt) {
   const tu = toys.update(gdt, attackDown);
   G.thrust = tu.thrust; G.thrustMax = tu.vmax || 3;
   if (P.attackT > 0) P.attackT -= rdt; // swing cooldown on the real clock: hit-stop / slow-mo never make you slower
+  try { fight.update(gdt, rdt); } catch (e) { report(e); } // attackers count, knock-back, flop / get up, hearts, slippers
   updatePlayer(gdt > 0 ? gdt : rdt * 0.06);
   checkPortals();
   updateInteract(rdt);
@@ -2456,6 +2488,13 @@ function frameUI() {
   } else { ui.prompt(null); gfx.highlight(null, 0); }
   // bubbles
   if (!S) return;
+  fight.frame(); // name tags, "!" over a wind-up, the player's blink
+  const pb = fight.playerBubble();
+  if (pb) {
+    const down = fight.FT.downT > 0 || fight.FT.getUpT > 0;
+    const s = toScreen(V(P.pos.x, P.y + (down ? 1.0 : 2.05), P.pos.z));
+    if (s) { ui.bubble('player', { text: pb, x: s.x, y: s.y }); G.pBubble = true; } else if (G.pBubble) { ui.bubble('player', null); G.pBubble = false; }
+  } else if (G.pBubble) { ui.bubble('player', null); G.pBubble = false; }
   for (const n of S.npcs) {
     const b = n.bubble;
     if (!b || !b.text || b.until < G.rtime || n.gone || G.mode === 'title') { if (n._bubbleOn) { ui.bubble(n.id, null); n._bubbleOn = false; } if (b && b.until < G.rtime) n.bubble = null; continue; }
@@ -2572,7 +2611,7 @@ function togglePause(on) {
 // ================================================================ auto bot (debug)
 function botUpdate(dt) {
   const B = _bot;
-  B.move.set(0, 0, 0); B.attack = false; B.kick = false; B.special = false;
+  B.move.set(0, 0, 0); B.attack = false; B.kick = false; B.special = false; B.guard = false;
   if (G.mode === 'title' || G.scene === 'bill' || G.busy || G.paused) { B.interact = false; return; }
   // elevator panel → pick the destination
   if (G.evPanel) {
@@ -2582,6 +2621,16 @@ function botUpdate(dt) {
   }
   let goal = null, wantInteract = false, near = 0.35;
   B.spray = false;
+  // 막기: someone about to swing at us (or a slipper on its way) → arms up for a moment (usually a perfect guard)
+  B.guard = false;
+  if (G.rampage && B.guardOn !== false) {
+    for (const n of G.S.npcs) {
+      if (!n.fighter || n.gone || n.atk === 'throw' || n.pos.distanceTo(P.pos) > 2.6) continue;
+      if ((n.state === 'windup' && n.t >= fight.RANK[n.fighter.rank].windup - 0.18) || (n.state === 'swing' && n.t < 0.15)) B.guard = true;
+    }
+    if (fight.incoming(2.2)) B.guard = true;
+    if (B.guard) { B.interact = false; return; }
+  }
   if (G.rampage && !B.forceDest && B.toys !== false) {
     const r = botToys(B, dt);
     if (r) { if (r.goal) { goal = r.goal; near = r.near || 0.3; } wantInteract = !!r.interact; if (!r.goal && !r.interact) { B.interact = false; return; } }
@@ -2761,6 +2810,22 @@ toys = createToys({
   unseat: () => unseat(),
   destroyHeld() { const r = P.held; if (!r) return; P.held = null; if (r.group.parent) r.group.parent.remove(r.group); r.removed = true; r.destroyed = true; addItem(r.name, r.price); addMoney(Math.max(0, r.price - r.paid), null, true); emit('break', r); },
 });
+fight = createFight({
+  G, P, fx, sfx, ui, report, vibrate, isCalm, shake, hitStop, camKick, setFace, addMoney, bumpCombo, count, keepIn, npcCtx,
+  breakCombo() { G.combo = 0; G.comboT = 0; ui.combo(0); },
+  // a blow lands: get off the chair / cart, put the carried coworker down (held props stay in hand)
+  onPlayerHit() { if (toys.riding()) toys.dismount(); if (P.carryNpc) releaseNpc(false); P.attackT = Math.max(P.attackT, 0.25); },
+  // a perfect-guarded slipper flies back and bonks the boss
+  hitNpc: (n, dir) => hitPerson(n, dir, 'thrown', { power: 0.7, dmg: 1 }),
+  // walls / pillars / big fixtures at (x, z) up to height y (slipper flight, line of sight)
+  solidAt(x, z, y = 1) {
+    const S = G.S; if (!S) return false;
+    const F = S.F, b = F.bounds;
+    if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) return true;
+    for (const r of S.staticRects) if ((r.y1 == null || r.y1 > y) && pointInRect(r, x, z, 0.05)) return true;
+    return false;
+  },
+});
 const GAME = {
   get G() { return G; }, get P() { return P; }, get S() { return G.S; }, get F() { return G.S && G.S.F; },
   get rampage() { return G.rampage; }, get mode() { return G.mode; }, get floor() { return G.floorKind; }, get time() { return G.rtime; },
@@ -2811,7 +2876,7 @@ requestAnimationFrame(frame);
 
 // ================================================================ debug hook
 if (DEBUG) {
-  _bot = { on: false, move: V(), interact: false, attack: false, kick: false, special: false, path: null, pathI: 0, pathT: 0, goal: V(), target: null, targetT: 0, skip: new Map(), dest: null, forceDest: null };
+  _bot = { on: false, move: V(), interact: false, attack: false, kick: false, special: false, guard: false, path: null, pathI: 0, pathT: 0, goal: V(), target: null, targetT: 0, skip: new Map(), dest: null, forceDest: null };
   const info = () => { const i = gfx.renderer.info; return { calls: i.render.calls, triangles: i.render.triangles, geometries: i.memory.geometries, textures: i.memory.textures }; };
   window.__ppg = {
     G, P, gfx, fx, scene, camera,
@@ -2832,8 +2897,24 @@ if (DEBUG) {
         floorsBuilt: Object.fromEntries(Object.entries(G.floors).map(([k, s]) => [k, s.buildMs])),
         toys: toys.state(), fcounts: G.fcounts[G.floorKind] || {},
         challenges: G.taskPool ? G.taskPool.map((t) => ({ id: t.id, text: t.text, key: t.key, need: t.need, p: chalProgress(t), done: t.done })) : [],
+        fight: fight.state(),
+        fighters: S ? S.npcs.filter((n) => n.fighter).map((n) => ({ i: S.npcs.indexOf(n), rank: n.fighter.rank, name: fight.nameOf(n), state: n.state, mental: n.mental, ko: n.isKo, beaten: n.beaten })) : [],
       };
     },
+    // ---- 반격 / 막기 / 이름 (tests)
+    fight: {
+      get api() { return fight; },
+      state: () => fight.state(),
+      // make npc q a fighter ('boss' | 'mid' | 'angry'); attack(q) = wind up right now (melee | throw)
+      make(q, rank = 'mid') { const n = __ppg._n(q); return fight.make(n, rank); },
+      attack(q, atk = 'melee') { const n = __ppg._n(q); return fight.attackNow(n, atk); },
+      hearts(h) { if (h != null) { fight.FT.hearts = h; fight.hud(); } return fight.FT.hearts; },
+      // player blow from npc q (or from the front): bypasses the AI, same rules (guard / perfect / hearts)
+      hitPlayer(q) { const n = q != null ? __ppg._n(q) : null; const d = n ? V(P.pos.x - n.pos.x, 0, P.pos.z - n.pos.z).normalize() : V(-Math.sin(P.yaw), 0, -Math.cos(P.yaw)); return fight.hitPlayer(n, d, 'melee'); },
+      resetMax() { fight.resetMaxAttackers(); return true; },
+      tune: () => ({ TUNE: fight.TUNE, RANK: fight.RANK }),
+    },
+    _n(q) { const L = G.S ? G.S.npcs : []; return typeof q === 'number' ? L[q] : L.find((x) => x.id === q) || L.find((x) => x.fighter && x.fighter.rank === q) || L.find((x) => x.role === q); },
     // ---- floors / toys helpers (debug + tests)
     floors() { return FLOOR_LIST.map((f) => Object.assign({}, f, { built: !!G.floors[f.id], wrecked: G.floors[f.id] ? G.floors[f.id].phys.records.filter((r) => r.destroyed || r.removed).length : 0 })); },
     chal(floor) { const C = G.chal[floor || G.floorKind]; return C ? C.pool.map((t) => ({ id: t.id, text: t.text, key: t.key, need: t.need, done: t.done, shown: C.shown.includes(t) })) : null; },
@@ -2874,7 +2955,7 @@ if (DEBUG) {
       const L = G.S ? G.S.npcs : [];
       const n = typeof q === 'number' ? L[q] : L.find((x) => x.id === q) || L.find((x) => x.role === q) || L.find((x) => x.spec.name === q);
       if (!n) return null;
-      return { i: L.indexOf(n), id: n.id, role: n.role, name: n.spec.name || null, x: +n.pos.x.toFixed(2), y: +n.y.toFixed(2), z: +n.pos.z.toFixed(2), yaw: +n.yaw.toFixed(2), state: n.state, mental: n.mental, mentalMax: n.mentalMax, ko: n.isKo, koCount: n.koCount, koT: +n.koT.toFixed(2), koLen: +n.koLen.toFixed(2), anim: n.char.anim, face: n.char.face, seated: !!n.seated, gone: n.gone, visible: n.group.visible, inScene: !!n.group.parent, stars: n.starsOn, ghost: n.ghostOn, bubble: n.bubble && n.bubble.until > G.rtime ? n.bubble.text : null, head: n.head.toArray().map((v) => +v.toFixed(2)), rotX: +n.group.rotation.x.toFixed(2) };
+      return { i: L.indexOf(n), id: n.id, role: n.role, name: n.spec.name || null, x: +n.pos.x.toFixed(2), y: +n.y.toFixed(2), z: +n.pos.z.toFixed(2), yaw: +n.yaw.toFixed(2), state: n.state, mental: n.mental, mentalMax: n.mentalMax, ko: n.isKo, koCount: n.koCount, koT: +n.koT.toFixed(2), koLen: +n.koLen.toFixed(2), anim: n.char.anim, face: n.char.face, seated: !!n.seated, gone: n.gone, visible: n.group.visible, inScene: !!n.group.parent, stars: n.starsOn, ghost: n.ghostOn, bubble: n.bubble && n.bubble.until > G.rtime ? n.bubble.text : null, head: n.head.toArray().map((v) => +v.toFixed(2)), rotX: +n.group.rotation.x.toFixed(2), fighter: n.fighter ? n.fighter.rank : null, hothead: !!n.hothead, beaten: n.beaten, tag: n.fighter ? fight.nameOf(n) : null, tagShown: !!(n._tag && n._tag.sprite.visible), bang: !!(n._bang && n._bang.visible), t: +n.t.toFixed(2) };
     },
     npcs() { return G.S ? G.S.npcs.map((n, i) => __ppg.npc(i)) : []; },
     spawnNpc(x, z, o = {}) {

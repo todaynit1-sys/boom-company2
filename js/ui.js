@@ -51,7 +51,7 @@ function grab() {
     'joy-knob', 'tbtns', 'subtitle', 'toast', 'banner', 'flash', 'elevator', 'ev-list', 'ev-close', 'title', 't-days',
     't-best', 't-gender', 't-help', 'pause', 'p-resume', 'p-skip', 'p-quit', 'p-title', 'p-keys', 'bill', 'r-co', 'r-meta',
     'r-items', 'r-total', 'r-best', 'r-relief', 'r-relief-bar', 'r-rank', 'r-comment', 'b-retry', 'b-share', 'b-title',
-    'fade', 'f-time', 'f-title', 'f-sub', 'boot']) E[id] = $(id);
+    'fade', 'f-time', 'f-title', 'f-sub', 'boot', 'hearts']) E[id] = $(id);
   E.stressIn = E.stress && E.stress.querySelector('.s-in b');
   E.promptKey = E.prompt && E.prompt.querySelector('.kc b');
   E.promptText = E.prompt && E.prompt.querySelector('.pt');
@@ -252,11 +252,10 @@ function syncTitleOpts() {
 function helpHTML() {
   if (isTouch) return '왼쪽 아래를 끌어 걷고, 오른쪽 화면을 끌어 둘러봐요. 오른쪽 버튼으로 때리고 집고 뛰어요.';
   const k = (t, s) => `<span class="hi"><span class="kc"><b>${t}</b></span>${s}</span>`;
-  return [k('WASD', '이동'), '<span class="hi">마우스 시점</span>', k('E', '행동'), k('Z', '·좌클릭 때리기'), k('X', '발차기'), k('Q', '필살기'), k('ESC', '멈춤')].join(' · ');
+  return [k('WASD', '이동'), '<span class="hi">마우스 시점</span>', k('E', '행동'), k('Z', '·좌클릭 때리기'), k('X', '발차기'), k('C', '막기'), k('Q', '필살기'), k('ESC', '멈춤')].join(' · ');
 }
-const PAUSE_KEYS_DESK = [['WASD', '이동'], ['마우스', '시점'], ['SPACE', '점프'], ['좌클릭/Z/J', '때리기'], ['우클릭/X/K', '발차기'], ['E', '행동(집기·엎기)'], ['Q', '필살기'], ['ESC/P', '멈춤']];
-const PAUSE_KEYS_TOUCH = [['왼쪽 아래', '끌어서 이동'], ['오른쪽 화면', '끌어서 시점'], ['때리기', '때리기'], ['행동', '집기·엎기'], ['점프', '점프'], ['필살기', '게이지가 차면']];
-
+const PAUSE_KEYS_DESK = [['WASD', '이동'], ['마우스', '시점'], ['SPACE', '점프'], ['좌클릭/Z/J', '때리기'], ['우클릭/X/K', '발차기'], ['C/L/Shift', '막기(꾹)'], ['E', '행동(집기·엎기)'], ['Q', '필살기'], ['ESC/P', '멈춤']];
+const PAUSE_KEYS_TOUCH = [['왼쪽 아래', '끌어서 이동'], ['오른쪽 화면', '끌어서 시점'], ['때리기', '때리기'], ['막기', '꾹 눌러 막기'], ['행동', '집기·엎기'], ['점프', '점프'], ['필살기', '게이지가 차면']];
 /* ---------- 청구서 ---------- */
 const MODE_LABEL = { story: '하루 이야기', rush: '1분 난동', free: '자유 난동' };
 let lastBill = null;
@@ -328,6 +327,26 @@ export const ui = {
   isTouch,
   joy,
   look,
+
+  // 기력 (hearts): shown once a fight has started; `hit` shakes the row, `down` greys it out
+  hearts(n, max = 5, { show = true, hit = false, down = false } = {}) {
+    const el = E.hearts; if (!el) return;
+    if (!show) { el.hidden = true; return; }
+    if (el.childElementCount !== max) { el.textContent = ''; for (let i = 0; i < max; i++) { const h = document.createElement('i'); el.appendChild(h); } }
+    el.hidden = false;
+    const hs = el.children;
+    for (let i = 0; i < max; i++) {
+      const full = i < n;
+      if (hs[i].classList.contains('on') !== full) {
+        hs[i].classList.toggle('on', full);
+        if (full) anim(hs[i], [{ transform: 'scale(1.6)' }, { transform: 'scale(1)' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.3,1)' });
+        else if (!root.classList.contains('calm')) anim(hs[i], [{ transform: 'scale(1.5) rotate(-15deg)' }, { transform: 'scale(1)' }], { duration: 320, easing: 'ease-out' });
+      }
+    }
+    el.classList.toggle('down', !!down);
+    el.classList.toggle('low', n <= 1 && !down);
+    if (hit && !root.classList.contains('calm')) anim(el, [{ transform: 'translateX(-5px)' }, { transform: 'translateX(5px)' }, { transform: 'translateX(-3px)' }, { transform: 'translateX(0)' }], { duration: 260 });
+  },
 
   init(handlers = {}) {
     H = handlers || {};

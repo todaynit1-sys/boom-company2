@@ -279,7 +279,7 @@ export const PRESETS = {
   glasses: { gender: 'm', suit: '#6b6f7a', pants: '#4b4e57', shirt: '#f3f3ef', tie: '#3d6b4f', hair: '#231d1b', hairStyle: 'side', skin: '#f0c4a2', glasses: true, lanyard: true, face: 'normal' },
 };
 
-export const ANIMS = ['idle', 'walk', 'run', 'sit', 'type', 'carry', 'phone', 'armsCrossed', 'lookUp', 'stretch', 'talk', 'offer', 'scared', 'flee', 'cheer', 'rageIdle', 'knocked', 'fall', 'ko', 'koFace', 'dizzy', 'groggy', 'stagger', 'coverEars', 'peek'];
+export const ANIMS = ['idle', 'walk', 'run', 'sit', 'type', 'carry', 'phone', 'armsCrossed', 'lookUp', 'stretch', 'talk', 'offer', 'scared', 'flee', 'cheer', 'rageIdle', 'knocked', 'fall', 'ko', 'koFace', 'dizzy', 'groggy', 'stagger', 'coverEars', 'peek', 'guard', 'fightIdle', 'windup', 'windupThrow', 'pant'];
 export const ONESHOTS = ['punch', 'punchL', 'kick', 'smash', 'flip', 'pull', 'take', 'jump', 'land', 'special'];
 
 // ---------------------------------------------------------------- pose channels
@@ -479,6 +479,51 @@ const POSE = {
     o[LSX] = o[RSX] = -0.45; o[LSZ] = o[RSZ] = 1.25; o[LSY] = o[RSY] = 0.55; o[LEX] = o[REX] = -2.35;
     o[SPX] = 0.3; o[HX] = 0.22 + tr * 0.02; o[BY] = -0.04;
     o[LHX] = o[RHX] = -0.2; o[LKX] = o[RKX] = 0.4; o[LHZ] = o[RHZ] = 0.1; o[BRZ] = tr * 0.02;
+    footFlat(o);
+  },
+  // ---- 반격 / 막기 set
+  // player guard: forearms crossed up in front of the face, chin tucked, knees soft (walks slowly in it)
+  guard(o, t, ph, sp) {
+    if (sp > 0.15) pWalk(o, t, ph, false); else { pIdle(o, t); o[LKX] = o[RKX] = 0.3; o[LHX] = o[RHX] = -0.16; o[LHZ] = o[RHZ] = 0.12; o[BY] = -0.03; footFlat(o); }
+    o[LSX] = o[RSX] = -1.3; o[LEX] = o[REX] = -2.15; o[LSY] = o[RSY] = 0.8; o[LSZ] = o[RSZ] = 0.24;
+    o[SPX] = 0.16; o[SPY] *= 0.3; o[HX] = 0.2; o[HY] *= 0.3;
+  },
+  // fighters squaring up: fists up, bouncing on the toes (walking keeps the fists up)
+  fightIdle(o, t, ph, sp) {
+    const q = abs(sin(t * 6.5));
+    if (sp > 0.15) pWalk(o, t, ph, sp > 3.2);
+    else { zero(o); o[LKX] = o[RKX] = 0.3 + q * 0.12; o[LHX] = o[RHX] = -0.16 - q * 0.06; o[LHZ] = o[RHZ] = 0.16; o[BY] = -0.03 - q * 0.015; footFlat(o); o[BRY] = 0.25 + sin(t * 1.7) * 0.06; }
+    o[LSX] = -1.05 + sin(t * 6.5) * 0.06; o[RSX] = -0.85 - sin(t * 6.5) * 0.06; o[LEX] = o[REX] = -2.0; o[LSY] = o[RSY] = 0.45; o[LSZ] = o[RSZ] = 0.22;
+    o[SPX] = 0.1; o[HX] = 0.06; o[HY] = -o[BRY] * 0.8;
+  },
+  // big telegraphed wind-up: leaning back, right fist cocked way behind, trembling
+  windup(o, t) {
+    zero(o);
+    const tr = sin(t * 42) * 0.035, k = min(1, t / 0.35);
+    o[RSX] = 0.75 * k; o[REX] = -1.95; o[RSZ] = 0.4; o[RSY] = -0.2;
+    o[LSX] = -1.2; o[LEX] = -1.6; o[LSY] = 0.3; o[LSZ] = 0.2;
+    o[SPY] = -0.55 * k + tr; o[SPX] = -0.14 * k; o[BRY] = -0.18 * k; o[HX] = -0.06; o[HY] = 0.35 * k;
+    o[LKX] = o[RKX] = 0.36; o[LHX] = o[RHX] = -0.2; o[LHZ] = o[RHZ] = 0.2; o[BY] = -0.045; o[BRZ] = tr;
+    o[SQ] = 1 + min(t, 0.9) * 0.05;
+    footFlat(o);
+  },
+  // the boss's slipper throw: arm up and back behind the head, other hand aiming
+  windupThrow(o, t) {
+    zero(o);
+    const tr = sin(t * 40) * 0.03, k = min(1, t / 0.35);
+    o[RSX] = -2.65 * k; o[REX] = -1.7 * k; o[RSZ] = 0.2;
+    o[LSX] = -1.45; o[LEX] = -0.3; o[LSY] = 0.1; o[LSZ] = 0.15;
+    o[SPX] = -0.26 * k; o[SPY] = -0.4 * k + tr; o[BRY] = -0.12; o[HX] = -0.1;
+    o[LKX] = 0.2; o[RKX] = 0.45; o[LHX] = -0.35; o[RHX] = 0.05; o[LHZ] = o[RHZ] = 0.14; o[BY] = -0.03;
+    footFlat(o);
+  },
+  // out of breath after a swing: hands on the knees, puffing
+  pant(o, t) {
+    zero(o);
+    const b = sin(t * 9);
+    o[SPX] = 0.55 + b * 0.03; o[HX] = -0.4; o[BY] = -0.06 + b * 0.006; o[SQ] = 1 + b * 0.02;
+    o[LHX] = o[RHX] = -0.42; o[LKX] = o[RKX] = 0.5; o[LHZ] = o[RHZ] = 0.14;
+    o[LSX] = o[RSX] = -0.6; o[LEX] = o[REX] = -0.2; o[LSZ] = o[RSZ] = 0.2; o[LSY] = o[RSY] = 0.15;
     footFlat(o);
   },
   // the hiding boss peeks round the pillar

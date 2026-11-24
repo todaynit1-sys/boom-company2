@@ -24,7 +24,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="css/style.css?v=7">
+<link rel="stylesheet" href="css/style.css?v=8">
 <script type="importmap">
 {
   "imports": {
@@ -56,6 +56,7 @@
       <button type="button" class="tbtn t-interact" data-act="interact">행동</button>
       <button type="button" class="tbtn t-jump" data-act="jump">점프</button>
       <button type="button" class="tbtn t-special" data-act="special"><span>필살기</span></button>
+      <button type="button" class="tbtn t-guard" data-act="guard">막기</button>
     </div>
   </div>
 
@@ -76,6 +77,7 @@
         <span class="s-bar"><i id="stress-fill"></i><span class="s-in">스트레스 <b>100%</b></span></span>
         <b id="stress-pct">0%</b>
       </div>
+      <div id="hearts" class="pill" hidden aria-label="기력"></div>
       <div id="timer" hidden></div>
     </div>
     <div class="hud-tr">
@@ -204,6 +206,6 @@
   <div id="boot"><div><p class="logo sm"><span class="l1">회사</span><span class="l2">뿌개기</span></p><p class="boot-t">불러오는 중…</p></div></div>
 </div>
 
-<script type="module" src="js/main.js?v=7"></script>
+<script type="module" src="js/main.js?v=8"></script>
 </body>
 </html>

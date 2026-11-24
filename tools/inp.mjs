@@ -1,7 +1,7 @@
 // Real input through CDP (keyboard / mouse / touch) for the human-input scenarios (sc-in-*.mjs).
 const KEYS = {
   KeyW: ['w', 87], KeyA: ['a', 65], KeyS: ['s', 83], KeyD: ['d', 68], KeyE: ['e', 69], KeyJ: ['j', 74], KeyK: ['k', 75], KeyQ: ['q', 81], KeyZ: ['z', 90], KeyX: ['x', 88],
-  KeyP: ['p', 80], KeyF: ['f', 70], Space: [' ', 32], Escape: ['Escape', 27], Digit1: ['1', 49], Digit7: ['7', 55], ArrowUp: ['ArrowUp', 38],
+  KeyP: ['p', 80], KeyF: ['f', 70], KeyC: ['c', 67], KeyL: ['l', 76], ShiftLeft: ['Shift', 16], Backspace: ['Backspace', 8], Enter: ['Enter', 13], Space: [' ', 32], Escape: ['Escape', 27], Digit1: ['1', 49], Digit7: ['7', 55], ArrowUp: ['ArrowUp', 38],
 };
 export function makeInput({ send, ev, sleep }) {
   const I = {

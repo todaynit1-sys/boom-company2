@@ -706,6 +706,30 @@ const SFX = {
     [2093, 2637, 3136, 3951, 4699].forEach((f, i) => { e = M(e, bell(c, o, T + 0.1 + i * 0.065, f * p, { d: 0.45, v: 0.07, ratios: [1, 2.4], amps: [1, 0.25] })); });
     return e;
   },
+  // ---- 막기 / 반격
+  // a blocked blow: wood-block "탁" + a soft thud on the forearms
+  block: (c, o, t, p) => M(
+    crack(c, o, t, { bp: 1800 * p, q: 1.4, v: 0.8, d: 0.004 }),
+    tone(c, o, t, { type: 'triangle', f: 640 * p, f1: 470 * p, a: 0.001, d: 0.07, v: 0.4 }),
+    weight(c, o, t, { f0: 150 * p, f1: 70, d: 0.09, v: 0.7 })),
+  // perfect guard "딱!": a bright clack + a two-note sparkle
+  perfect: (c, o, t, p) => M(
+    crack(c, o, t, { hp: 2500, v: 1, d: 0.003 }),
+    tone(c, o, t, { type: 'square', f: 1760 * p, lp: 5000, a: 0.001, d: 0.05, v: 0.16 }),
+    weight(c, o, t, { f0: 210 * p, f1: 80, d: 0.08, v: 0.8 }),
+    bell(c, o, t + 0.03, 2637 * p, { d: 0.6, v: 0.13, ratios: [1, 2.4, 3.9], amps: [1, 0.3, 0.1] }),
+    bell(c, o, t + 0.1, 3520 * p, { d: 0.55, v: 0.11, ratios: [1, 2.4, 3.9], amps: [1, 0.3, 0.1] })),
+  // a fighter rearing back: a rising cartoon whistle over a little ratchet (~0.7 s)
+  windup: (c, o, t, p) => M(
+    tone(c, o, t, { type: 'triangle', f: 300 * p, fs: [[0.68, 920 * p]], vib: [14, 18], a: 0.03, h: 0.55, d: 0.1, v: 0.16 }),
+    scatter(t, 9, 0.6, (tt, k) => noise(c, o, tt, { bp: 2600 * p, q: 3, a: 0.001, d: 0.012, v: 0.28 * k }))),
+  // the player gets bonked: thud + springy boing (no voice)
+  hurt: (c, o, t, p) => M(
+    weight(c, o, t, { f0: 160 * p, f1: 60, d: 0.12, v: 1.0 }),
+    noise(c, o, t, { bp: 1100, q: 1, a: 0.001, d: 0.05, v: 0.6 }),
+    tone(c, o, t + 0.01, { f: 330 * p, fs: [[0.08, 540 * p], [0.3, 250 * p]], vib: [16, 40], a: 0.005, h: 0.08, d: 0.22, v: 0.2 })),
+  // arms up: a short cloth swish
+  guardUp: (c, o, t, p) => noise(c, o, t, { bp: 1500 * p, q: 0.8, ffs: [[0.06, 2600 * p]], a: 0.01, d: 0.06, v: 0.3 }),
   // a cartoon bonk on a limp body: wood-block tock + springy boing
   bonk: (c, o, t, p) => M(
     crack(c, o, t, { bp: 2200 * p, q: 1.2, v: 0.5, d: 0.003 }),
@@ -734,6 +758,7 @@ const LEVEL = {
   clap: 1.6, wind: 1.0,
   coin: 1.8, comboUp: 0.78, bigMoney: 0.78, bonus: 0.7, specialReady: 0.62,
   ko: 0.8, bonk: 1.6, soul: 2.5, soulBack: 2.5,
+  block: 0.8, perfect: 0.62, windup: 1.4, hurt: 0.75, guardUp: 1.3,
 };
 
 // sounds whose pitch must not be randomly jittered (musical / UI)

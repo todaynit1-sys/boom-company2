@@ -26,7 +26,10 @@ export const HIT_LINES = {
   ears: ['귀가!', '으아아!', '시끄러워요!'],
 };
 // 멘탈 per role (spec.mental overrides): coworkers take 3 punches, bosses / security 5
+// (fighters get their own: 보스 8, 중간보스 6 — see fight.js RANK)
 export const MENTAL = { boss: 5, ceo: 5, exec: 5, guard: 5 };
+// fighting states (fight.js runs them through ctx.fightTick)
+const FIGHTING = new Set(['ready', 'fight', 'windup', 'swing', 'recover', 'stun', 'taunt']);
 export const KO_LEN = [10.5, 13]; // seconds knocked out (VIPs +1.5)
 
 let SEQ = 0;
@@ -62,6 +65,8 @@ export class NPC {
     this.bounced = false; this.twirl = 0; this.tumble = 0; this.airT = 0.5; this.yaw0 = 0;
     this.head = new THREE.Vector3(); this.chest = new THREE.Vector3(); // world points for stars / soul puff / bubbles
     this.starsOn = false; this.ghostOn = false; this.starSize = 1;
+    // 반격: fighter = { rank: 'boss' | 'mid' | 'angry' } (set by fight.js), beaten after their first KO (then they flee)
+    this.fighter = null; this.hothead = false; this.beaten = false; this.cool = 0; this.tagH = 0;
     this.bumpK = 0; this.squashT = 1; this.faceT = 0; this.nextTrip = 0; this.peekT = 0;
     this.sc = this.char.group.scale.x;
     this.char.group.rotation.order = 'YXZ'; // tumble about the body's own axes, then yaw
@@ -85,6 +90,19 @@ export class NPC {
     g.rotation.y = this.yaw;
   }
   say(text, sec = 2.6, now = 0) { this.bubble = { text, until: now + sec }; }
+  // fighters stand their ground during a rampage (until they've been knocked out once)
+  fights(ctx) { return !!(this.fighter && !this.beaten && ctx.fightOn && ctx.fightOn(this)); }
+  get fighting() { return FIGHTING.has(this.state); }
+  // square up: fists up, face the player (ready = wait for them to come close, fight = go get them)
+  engage(ctx, ready = false) {
+    this.standUp();
+    this.path = null; this.onArrive = null;
+    this.char.lookAt(null);
+    if (!this.isKo) this.starsOn = false; // (dizzy / stunned stars off)
+    this.state = ready ? 'ready' : 'fight'; this.t = 0;
+    this.char.setAnim('fightIdle'); this.char.setFace('rage');
+    if (!ready && ctx.onFight) ctx.onFight(this, 'engage');
+  }
   standUp(noShift = false) {
     if (!this.seated) return;
     this.seated = false;
@@ -108,6 +126,8 @@ export class NPC {
   alarm(ctx, from) {
     if (this.gone || this.role === 'walker') return;
     if (this.state === 'air' || this.state === 'down' || this.state === 'shock' || this.state === 'slide' || this.state === 'stumble' || this.state === 'dizzy' || this.isKo) return;
+    // a fighter doesn't run: squares up where they stand
+    if (this.fights(ctx)) { if (!this.fighting) this.engage(ctx, true); return; }
     if (this.panicked && (this.state === 'flee' || this.state === 'hide')) return;
     if (this.panicked && this.state === 'cower') {
       if (this.pos.distanceTo(from) < 3.2 && this.t > 1.5) this.flee(ctx, from);
@@ -129,6 +149,7 @@ export class NPC {
     return true;
   }
   flee(ctx, from, opts = null) {
+    if (this.fights(ctx)) { this.engage(ctx); return; } // (after a hit / a dizzy spell: back at it)
     this.standUp();
     this.char.lookAt(null);
     const groggy = !!(opts && opts.groggy);
@@ -188,6 +209,14 @@ export class NPC {
       this.char.setFace('shock');
       this.launch(dir, power, true, false);
       return 2;
+    }
+    // a fighter mid wind-up grits their teeth: 멘탈 still drops, but no flinch / knock-back — the swing comes anyway
+    // (so the "!" means: guard or step away; trading blows still wins, it just costs a heart now and then)
+    if (this.state === 'windup' && this.fighter && kind !== 'special') {
+      this.squashT = 0; this.char.setFace('rage');
+      if (Math.random() < 0.5) this.say(pick(['안 아파!', '끄떡없어!', '간지러워!', '어림없다!']), 1.0, ctx.now);
+      ctx.sfx('yelp', { pitch: rnd(0.75, 0.9), vol: 0.45 });
+      return 1;
     }
     // still standing: the bubble escalates with what's left
     const left = this.mental;
@@ -400,6 +429,11 @@ export class NPC {
         }
         break;
       }
+      case 'ready': case 'fight': case 'windup': case 'swing': case 'recover': case 'stun': case 'taunt': {
+        if (ctx.fightTick && this.fighter) sp = ctx.fightTick(this, dt, ctx);
+        else { this.state = 'idle'; this.t = 0; c.setAnim('idle'); }
+        break;
+      }
       case 'carried': break;
       case 'script': break;
       case 'stroll': {
@@ -427,7 +461,7 @@ export class NPC {
       g.scale.set(this.sc * (1 + 0.16 * k), this.sc * (1 - 0.3 * k), this.sc * (1 + 0.16 * k));
       if (u >= 1) g.scale.setScalar(this.sc);
     }
-    if (this.starsOn || this.ghostOn || this.isKo || this.state === 'dizzy') this.anchors();
+    if (this.starsOn || this.ghostOn || this.isKo || this.state === 'dizzy' || this.state === 'stun') this.anchors();
     c.update(dt, sp);
   }
   // a body lying flat reaches ~1.2 m past its feet: keep the head end out of walls / windows / out-zones too
@@ -459,8 +493,8 @@ export class NPC {
   }
   // bubble anchor (frameUI): above the head, wherever the head is
   bubbleAt(out) {
-    if (this.isKo || this.lying || this.state === 'dizzy') { this.anchors(); return out.set(this.head.x, this.head.y + 0.62, this.head.z); }
-    return out.set(this.pos.x, this.y + (this.seated ? 1.45 : 1.95) * this.sc, this.pos.z);
+    if (this.isKo || this.lying || this.state === 'dizzy' || this.state === 'stun') { this.anchors(); return out.set(this.head.x, this.head.y + 0.62 + (this.isKo || this.lying ? this.tagH * 0.5 : this.tagH), this.head.z); }
+    return out.set(this.pos.x, this.y + (this.seated ? 1.45 : 1.95) * this.sc + this.tagH, this.pos.z);
   }
   enterKo(ctx) {
     const fresh = this.koLen === 0; // a new KO (not a limp body landing again)
@@ -475,6 +509,7 @@ export class NPC {
     if (fresh) ctx.onKo && ctx.onKo(this, 'land');
   }
   wake(ctx) {
+    if (this.fighter) this.beaten = true; // knocked out once: no more fighting, they stagger off like everybody else
     this.state = 'wake'; this.t = 0; this.koLen = 0;
     this.starsOn = false; this.ghostOn = false;
     this.koFace = false;
@@ -483,7 +518,7 @@ export class NPC {
   }
   // scripted reset (story scenes): fresh 멘탈, no KO leftovers
   resetKo() {
-    this.mental = this.mentalMax; this.koLen = 0; this.koT = 0; this.koAfter = false; this.limp = false; this.trip_ = false;
+    this.mental = this.mentalMax; this.koLen = 0; this.koT = 0; this.koAfter = false; this.limp = false; this.trip_ = false; this.beaten = false;
     this.starsOn = false; this.ghostOn = false; this.bumpK = 0; this.squashT = 1; this.faceT = 0;
     this.char.setBump(0); this.char.setTieFlop(0); this.char.setGlasses(true);
     this.char.group.scale.setScalar(this.sc); this.char.group.rotation.z = 0;
