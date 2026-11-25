@@ -2312,6 +2312,24 @@ function groundAt(F, x, z) {
 function keepIn() {
   const F = G.S && G.S.F; if (!F) return;
   const m = P.r + 0.06;
+  // hard floor bounds: whatever shoved the player (knock-back, spray, rides, jumping over low walls),
+  // they never end up outside the room. Elevator cabins sit behind the wall, so the doorway → cabin
+  // stretch is allowed; scripted moves (G.busy) are left alone.
+  if (!G.busy) {
+    const b = F.bounds;
+    if (P.pos.x < b.minX + m || P.pos.x > b.maxX - m || P.pos.z < b.minZ + m || P.pos.z > b.maxZ - m) {
+      let inCar = false;
+      for (const ev of F.elevators) {
+        const ax = P.pos.x - ev.front.x, az = P.pos.z - ev.front.z;
+        const along = -(ax * ev.fwd.x + az * ev.fwd.z), lat = Math.abs(ax * ev.right.x + az * ev.right.z);
+        if (along > -0.6 && along < 3.2 && lat < 1.05) { inCar = true; break; }
+      }
+      if (!inCar) {
+        P.pos.x = clamp(P.pos.x, b.minX + m, b.maxX - m);
+        P.pos.z = clamp(P.pos.z, b.minZ + m, b.maxZ - m);
+      }
+    }
+  }
   for (const Z of F.outZones) {
     const a = Z.axis === 'z' ? P.pos.x : P.pos.z;
     if (a < Z.from - 0.3 || a > Z.to + 0.3) continue;

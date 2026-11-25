@@ -417,7 +417,7 @@ export function createFight(D) {
     if (FT.kb.lengthSq() > 1e-4) {
       P.pos.x += FT.kb.x * gdt; P.pos.z += FT.kb.z * gdt;
       const k = Math.max(0, 1 - gdt * 7); FT.kb.multiplyScalar(k);
-      if (G.S) { collideCircle(P.pos, P.r, G.S.lists, P.y); D.keepIn(); }
+      if (G.S) { collideCircle(P.pos, P.r, G.S.lists, P.y); collideCircle(P.pos, P.r, [G.S.F.rects], P.y); D.keepIn(); }
     }
     // flop → get up (full hearts)
     if (FT.downT > 0) {
