@@ -1,4 +1,4 @@
-// 회사 뿌개기 — 반격 · 막기 · 기력 (fighting back, guarding, the player's hearts). Cartoon slapstick only: nobody
+// 회사 뿌개기 — 반격 · 막기 · 체력 (fighting back, guarding, the player's HP). Cartoon slapstick only: nobody
 // bleeds, nobody is hurt for real; the player "loses" by flopping over for two seconds and getting up again.
 //
 // Who fights: the floor's 보스 (role boss / ceo), one 중간보스 per floor (spec.rank 'mid', else exec / guard /
@@ -13,10 +13,16 @@
 // guarding or stepping back makes it cleaner. The 보스 can also throw a slipper in an arc (side-step or guard).
 //
 // Guard (hold C / L / Shift, or the 막기 button): no damage, a small push back. Raised ≤ 0.25 s before the blow =
-// "딱!" perfect guard: the attacker is dizzy for 1.5 s, a little money pop + combo. 기력 5 hearts: a hit costs one
-// (+1 s blink of invulnerability); at 0 you flop for ~2 s and get up with all five. Hearts refill when left alone.
+// "딱!" perfect guard: the attacker is dizzy for 1.5 s, a little money pop + combo.
+// 체력(HP): 게이지 숫자 (보통 100). 맞으면 피해만큼 깎이고 잠깐 깜박이며 안 맞는다. 0 이 되면 난이도 규칙대로:
+// 'getup' = ~2 s 쓰러졌다 꽉 찬 체력으로 일어남, 'retry' = 쓰러진 채 이 판 실패 (window 'ppg-ko' 이벤트 + D.onPlayerKo;
+// main.js 가 다시 하기를 띄운다 — 아무도 처리 안 하면 몇 초 뒤 그냥 일어난다). 가만히 있으면 체력이 다시 찬다.
+// 난이도(diff.js)는 판 시작 · 층 만들기 · 난동 시작 때 applyDiff() 로 TUNE / RANK 에 반영된다.
+// (옛 이름 hearts 는 HP 를 하트 5칸으로 환산한 값으로 남겨 둠: FT.hearts, state().hearts)
 import * as THREE from 'three';
 import { collideCircle } from './nav.js';
+import { D as diffNow } from './diff.js';
+import { initHpBar, updateHpBar } from './hpbar.js';
 
 const PI = Math.PI;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -26,18 +32,45 @@ function wrapA(a) { while (a > PI) a -= 2 * PI; while (a < -PI) a += 2 * PI; ret
 function angLerp(a, b, k) { return a + wrapA(b - a) * Math.min(1, k); }
 
 export const FIGHT_STATES = new Set(['ready', 'fight', 'windup', 'swing', 'recover', 'stun', 'taunt']);
-// tuning (raised 2026-11-24 "너무 약하다": faster wind-ups, combos, boss hits for 2 hearts; still no game over, two attackers at most)
+// tuning (보통 = 2026-11-24 "너무 약하다" 조율 그대로). 난이도 값은 applyDiff() 가 덮어쓴다 (BASE_* 는 그대로 둠).
 export const TUNE = {
-  hearts: 5, invuln: 0.6, regenDelay: 6.0, regenEvery: 3.0, flop: 2.0, getUp: 0.75, upInvuln: 1.5,
+  hpMax: 100, hearts: 5, invuln: 0.6, regen: true, regenDelay: 6.0, regenRate: 7, flop: 2.0, getUp: 0.75, upInvuln: 1.5,
   perfect: 0.25, stun: 1.5, maxAttackers: 2, aggro: 3.4, leash: 10, guardSpeed: 0.45, perfectPay: 5000,
-  hover: 2.3,
+  hover: 2.3, chip: 0, koRule: 'getup', outWait: 7, diff: 'normal', diffName: '보통', moneyMul: 1,
 };
-export const RANK = {
-  // dmg = hearts per clean hit; combo = chance of a quick follow-up swing (comboWind = its short wind-up)
-  boss: { mental: 15, speed: 2.95, windup: 0.62, reach: 1.6, recover: 0.7, cool: [0.45, 1.0], throw: 0.95, dmg: 2, combo: 0.5, comboWind: 0.34 },
-  mid: { mental: 10, speed: 2.9, windup: 0.6, reach: 1.5, recover: 0.75, cool: [0.55, 1.15], dmg: 1, combo: 0.35, comboWind: 0.36 },
-  angry: { mental: null, speed: 2.7, windup: 0.62, reach: 1.4, recover: 0.85, cool: [0.9, 1.6], dmg: 1, combo: 0 },
+// dmg = HP per clean hit (보통 기준: 보스 40 = 옛 하트 2칸, 중간보스 · 욱한 직원 20 = 1칸);
+// combo = chance of a quick follow-up swing (comboWind = its short wind-up)
+export const BASE_RANK = {
+  boss: { mental: 15, speed: 2.95, windup: 0.62, reach: 1.6, recover: 0.7, cool: [0.45, 1.0], throw: 0.95, dmg: 40, combo: 0.5, comboWind: 0.34 },
+  mid: { mental: 10, speed: 2.9, windup: 0.6, reach: 1.5, recover: 0.75, cool: [0.55, 1.15], dmg: 20, combo: 0.35, comboWind: 0.36 },
+  angry: { mental: null, speed: 2.7, windup: 0.62, reach: 1.4, recover: 0.85, cool: [0.9, 1.6], dmg: 20, combo: 0, comboWind: 0.4 },
 };
+const cloneRank = (r) => Object.assign({}, r, { cool: r.cool.slice() });
+export const RANK = { boss: cloneRank(BASE_RANK.boss), mid: cloneRank(BASE_RANK.mid), angry: cloneRank(BASE_RANK.angry) };
+const BASE_TUNE = Object.assign({}, TUNE);
+// 지금 난이도를 TUNE / RANK 에 옮긴다 (같은 객체를 고쳐 쓰므로 main.js 의 fight.RANK / tune() 도 같은 값을 본다)
+export function applyDiff(d = diffNow()) {
+  Object.assign(TUNE, BASE_TUNE, {
+    hpMax: d.hp, invuln: d.invuln, regen: !!d.regen && d.regenRate > 0, regenDelay: d.regenDelay, regenRate: d.regenRate,
+    perfect: d.perfect, stun: d.stun, maxAttackers: d.maxAttackers, aggro: d.aggro, chip: d.chip, koRule: d.koRule,
+    diff: d.id, diffName: d.n, moneyMul: d.moneyMul,
+  });
+  for (const k of Object.keys(BASE_RANK)) {
+    const B = BASE_RANK[k], R = RANK[k];
+    R.mental = B.mental == null ? null : Math.round(B.mental * d.enemyHpMul);
+    R.speed = B.speed * d.speedMul;
+    R.windup = B.windup * d.windupMul;
+    R.comboWind = B.comboWind * d.windupMul;
+    R.recover = B.recover * d.paceMul;
+    R.cool = [B.cool[0] * d.paceMul, B.cool[1] * d.paceMul];
+    R.dmg = Math.round(B.dmg * d.dmgMul);
+    R.combo = clamp(B.combo + d.comboAdd, 0, 0.85);
+    if (B.throw) R.throw = B.throw * (d.paceMul < 1 ? 1.4 : d.paceMul > 1 ? 0.6 : 1);
+    R.armor = k === 'boss' ? d.armorBoss : k === 'mid' ? d.armorMid : 1;
+  }
+  return d;
+}
+applyDiff();
 // bubbles ({B} boss name, {M} mid-boss name, {P} the player's name)
 const LINES = {
   boss: {
@@ -63,9 +96,12 @@ export function createFight(D) {
   //       onPlayerHit, hitNpc, solidAt, keepIn, count, report }
   const { G, P } = D;
   const FT = {
-    hearts: TUNE.hearts, invuln: 0, downT: 0, getUpT: 0, guard: false, guardWant: false, guardT0: -9, lastHit: -99, regenT: 0,
+    hp: TUNE.hpMax, invuln: 0, downT: 0, getUpT: 0, guard: false, guardWant: false, guardT0: -9, lastHit: -99,
     started: false, perfects: 0, blocks: 0, hitsTaken: 0, flops: 0, attackers: 0, maxAttackers: 0, kb: new THREE.Vector3(),
-    bubble: null, blink: 0,
+    bubble: null, blink: 0, dmgTaken: 0, out: false, outT: 0, fails: 0, lastDmg: 0, hitSeq: 0, wasOn: false,
+    // 옛 이름: HP 를 하트 5칸으로 환산 (읽기 · 쓰기 모두 됨 — __ppg.fight.hearts(1) 은 HP 20%)
+    get hearts() { return this.hp <= 0 ? 0 : Math.max(1, Math.ceil(this.hp / TUNE.hpMax * TUNE.hearts - 1e-6)); },
+    set hearts(h) { this.hp = clamp(h / TUNE.hearts * TUNE.hpMax, 0, TUNE.hpMax); },
   };
   const star = { head: new THREE.Vector3(), starsOn: false, starSize: 1, gone: false }; // the player's KO stars (fx owner)
   const shots = []; // slippers in flight / on the floor
@@ -95,24 +131,49 @@ export function createFight(D) {
 
   // ---------------------------------------------------------------- who fights (per floor, at build time)
   function setFighter(n, rank) {
-    n.fighter = { rank };
+    n.fighter = { rank, armor: RANK[rank].armor };
     const m = RANK[rank].mental;
     if (m != null && n.spec.mental == null) { n.mentalMax = m; n.mental = m; }
   }
+  // 난이도를 다시 읽는다: TUNE / RANK + 이미 지어 둔 층의 (아직 안 맞은) 보스 · 중간보스 멘탈
+  function refreshDiff() {
+    applyDiff();
+    if (G.floors) for (const S of Object.values(G.floors)) {
+      if (!S || !S.npcs) continue;
+      for (const n of S.npcs) {
+        if (!n.fighter) continue;
+        n.fighter.armor = RANK[n.fighter.rank].armor;
+        const m = RANK[n.fighter.rank].mental;
+        if (m != null && n.spec.mental == null && n.mental === n.mentalMax && !n.isKo && !n.beaten) { n.mentalMax = m; n.mental = m; }
+      }
+    }
+    if (FT.hp > TUNE.hpMax || (!on() && !down())) FT.hp = TUNE.hpMax;
+  }
+  // 메뉴에서 난이도를 바꾸면 (싸우는 중이 아닐 때) 바로 반영
+  try { window.addEventListener('ppg-diff', () => { if (!on()) refreshDiff(); }); } catch (e) { /* 무시 */ }
   function designate(S) {
+    applyDiff();
     const L = S.npcs.filter((n) => n.role !== 'walker');
     const boss = L.find((n) => n.role === 'boss' || n.role === 'ceo');
     if (boss) setFighter(boss, 'boss');
     const mid = L.find((n) => n.spec.rank === 'mid' && n !== boss) || L.find((n) => (n.role === 'exec' || n.role === 'guard') && n !== boss) || L.find((n) => n.role === 'worker' && !n.seated && n !== boss);
     if (mid) setFighter(mid, 'mid');
-    // one short-tempered coworker per floor (snaps after the first hit)
+    // short-tempered coworkers (snap after the first hit): 보통 1명 / 층, 쉬움 반반, 어려움 3명
     const pool = L.filter((n) => n.role === 'worker' && !n.fighter);
-    if (pool.length >= 3) pick(pool).hothead = true;
+    if (pool.length >= 3) {
+      const am = diffNow().angryMul;
+      let k = Math.floor(am) + (Math.random() < am - Math.floor(am) ? 1 : 0);
+      k = Math.min(k, pool.length - 2);
+      for (let i = 0; i < k; i++) { const j = (Math.random() * pool.length) | 0; pool[j].hothead = true; pool.splice(j, 1); }
+    }
   }
   // a hot-head who just got hit and is still standing: fights from now on
   function anger(n) {
     if (!n || n.fighter || !n.hothead || !on()) return false;
-    n.hothead = false; n.fighter = { rank: 'angry' };
+    n.hothead = false; n.fighter = { rank: 'angry', armor: 1 };
+    // 어려움: 욱한 사람도 맷집이 붙는다
+    const extra = Math.round((diffNow().enemyHpMul - 1) * 2);
+    if (extra > 0) { n.mentalMax += extra; n.mental += extra; }
     n.say(pick(LINES.angry.engage), 2.2, G.rtime);
     D.sfx('gasp', { vol: 0.4, pitch: 0.8 });
     return true;
@@ -283,16 +344,25 @@ export function createFight(D) {
         D.sfx('perfect', { vol: 0.8 });
         D.hitStop('kick'); D.shake(0.32); D.vibrate(35);
         if (!calm) D.ui.flash('#fff3b0', 140);
-        D.addMoney(TUNE.perfectPay, _v.set(P.pos.x, P.y + 2.0, P.pos.z), false, true, '딱!');
+        D.addMoney(Math.round(TUNE.perfectPay * (TUNE.moneyMul || 1)), _v.set(P.pos.x, P.y + 2.0, P.pos.z), false, true, '딱!');
         D.bumpCombo();
         D.count('perfectGuard');
         if (kind === 'melee') stun(src);
-      } else { D.shake(0.18); D.hitStop('punch'); D.vibrate(15); }
+      } else {
+        D.shake(0.18); D.hitStop('punch'); D.vibrate(15);
+        // 어려움: 그냥 막기는 조금 뚫린다 (딱! 은 안 뚫림)
+        if (TUNE.chip > 0) {
+          const chip = Math.max(1, Math.round(dmgOf(src) * TUNE.chip));
+          FT.hp = Math.max(1, FT.hp - chip); FT.dmgTaken += chip; FT.lastDmg = chip; FT.hitSeq++;
+          FT.lastHit = G.rtime; FT.invuln = Math.min(TUNE.invuln, 0.3);
+        }
+      }
       return perfect ? 'perfect' : 'block';
     }
-    // unguarded: one heart, a flinch + a hop back, combo broken, a second of blinking invulnerability
-    const dmg = (src && src.fighter && RANK[src.fighter.rank] && RANK[src.fighter.rank].dmg) || 1;
-    FT.hearts = Math.max(0, FT.hearts - dmg); FT.invuln = TUNE.invuln; FT.lastHit = G.rtime; FT.regenT = 0; FT.hitsTaken++;
+    // unguarded: HP down by the blow, a flinch + a hop back, combo broken, a moment of blinking invulnerability
+    const dmg = dmgOf(src);
+    FT.hp = Math.max(0, FT.hp - dmg); FT.invuln = TUNE.invuln; FT.lastHit = G.rtime; FT.hitsTaken++;
+    FT.dmgTaken += dmg; FT.lastDmg = dmg; FT.hitSeq++;
     FT.kb.set(dir.x * 4.2, 0, dir.z * 4.2);
     if (P.onGround) { P.vy = 2.4; P.onGround = false; }
     P.char.playOnce('land'); D.setFace('shock', 0.9);
@@ -303,16 +373,26 @@ export function createFight(D) {
     D.breakCombo();
     D.onPlayerHit();
     if (!FT.started) FT.started = true;
-    if (FT.hearts <= 0) flop();
+    if (FT.hp <= 0) flop();
     hud(true);
     return 'hit';
   }
+  function dmgOf(src) { return (src && src.fighter && RANK[src.fighter.rank] && RANK[src.fighter.rank].dmg) || RANK.angry.dmg; }
   function flop() {
     FT.downT = TUNE.flop; FT.getUpT = 0; FT.flops++;
     P.char.setAnim('ko'); D.setFace('ko');
     star.starsOn = true; updateStar(); D.fx.koStars(star);
     D.sfx('ko', { vol: 0.7, at: 0.35 });
-    FT.bubble = { text: '아이고…', until: G.rtime + 2.0 };
+    const retry = TUNE.koRule === 'retry';
+    FT.bubble = { text: retry ? '으악… 졌다…' : '아이고…', until: G.rtime + (retry ? 3.0 : 2.0) };
+    if (retry) {
+      // 이 판 실패: 쓰러진 채로 (main.js 가 다시 하기를 띄운다)
+      FT.out = true; FT.outT = 0; FT.fails++;
+      try { if (D.onPlayerKo) D.onPlayerKo('retry'); } catch (e) { if (D.report) D.report(e); }
+      try { window.dispatchEvent(new CustomEvent('ppg-ko', { detail: { rule: 'retry', diff: TUNE.diff } })); } catch (e) { /* 무시 */ }
+    } else {
+      try { window.dispatchEvent(new CustomEvent('ppg-ko', { detail: { rule: 'getup', diff: TUNE.diff } })); } catch (e) { /* 무시 */ }
+    }
     // everyone backs off and gloats (no piling on someone lying down)
     if (G.S) for (const n of G.S.npcs) if (n.fighter && (n.state === 'windup' || n.state === 'swing')) { enter(n, 'taunt'); }
   }
@@ -401,7 +481,11 @@ export function createFight(D) {
   function update(gdt, rdt) {
     // how many are winding up / swinging right now (the cap counts these)
     let a = 0, ctx = null;
-    const live = on() && !G.busy;
+    const isOn = on();
+    // a fight phase begins (난동 시작 — 이야기 마지막 1분 포함): read the difficulty now
+    if (isOn && !FT.wasOn && !FT.started && !down()) { refreshDiff(); FT.hp = TUNE.hpMax; }
+    FT.wasOn = isOn;
+    const live = isOn && !G.busy;
     if (G.S) for (const n of G.S.npcs) {
       if (!n.fighter || n.gone) continue;
       if (n.state === 'windup' || n.state === 'swing') a++;
@@ -419,8 +503,12 @@ export function createFight(D) {
       const k = Math.max(0, 1 - gdt * 7); FT.kb.multiplyScalar(k);
       if (G.S) { collideCircle(P.pos, P.r, G.S.lists, P.y); collideCircle(P.pos, P.r, [G.S.F.rects], P.y); D.keepIn(); }
     }
-    // flop → get up (full hearts)
-    if (FT.downT > 0) {
+    // flop → get up (full HP). 'retry' KO: stay down until main.js restarts (or, unhandled, get up after outWait s)
+    if (FT.out) {
+      FT.outT += gdt;
+      FT.downT = Math.max(0.05, FT.downT - gdt); updateStar();
+      if (FT.outT >= TUNE.outWait) { FT.out = false; FT.downT = 0.05; }
+    } else if (FT.downT > 0) {
       FT.downT -= gdt; updateStar();
       if (FT.downT <= 0) {
         FT.downT = 0; FT.getUpT = TUNE.getUp; star.starsOn = false;
@@ -430,15 +518,16 @@ export function createFight(D) {
     } else if (FT.getUpT > 0) {
       FT.getUpT -= gdt;
       if (FT.getUpT <= 0) {
-        FT.getUpT = 0; FT.hearts = TUNE.hearts; FT.invuln = TUNE.upInvuln; FT.lastHit = G.rtime;
+        FT.getUpT = 0; FT.hp = TUNE.hpMax; FT.invuln = TUNE.upInvuln; FT.lastHit = G.rtime;
         P.char.setAnim('rageIdle'); D.setFace('rage');
         FT.bubble = { text: '다시 간다!', until: G.rtime + 1.4 };
         D.sfx('jump', { vol: 0.4 });
         hud();
       }
-    } else if (FT.hearts < TUNE.hearts && G.rtime - FT.lastHit > TUNE.regenDelay) {
-      FT.regenT += gdt;
-      if (FT.regenT >= TUNE.regenEvery) { FT.regenT = 0; FT.hearts++; hud(); }
+    } else if (TUNE.regen && FT.hp < TUNE.hpMax && G.rtime - FT.lastHit > TUNE.regenDelay) {
+      const h0 = FT.hearts;
+      FT.hp = Math.min(TUNE.hpMax, FT.hp + TUNE.regenRate * gdt);
+      if (FT.hearts !== h0) hud();
     }
     updateShots(gdt);
   }
@@ -450,9 +539,19 @@ export function createFight(D) {
     FT.guard = g;
     return g;
   }
+  // 옛 하트 줄(#hearts): 체력 게이지(hpbar.js)가 대신하므로 숨겨 둔다. SHOW_HEARTS = true 로 다시 켤 수 있음
+  // (켜면 HP 를 하트 5칸으로 환산해 보여 준다)
+  const SHOW_HEARTS = false;
   function hud(hit = false) {
-    const show = FT.started && (G.rampage || G.mode !== 'story') && G.scene !== 'bill' && G.mode !== 'title';
-    D.ui.hearts(FT.hearts, TUNE.hearts, { show, hit, down: down() });
+    const show = SHOW_HEARTS && FT.started && (G.rampage || G.mode !== 'story') && G.scene !== 'bill' && G.mode !== 'title';
+    if (D.ui && D.ui.hearts) D.ui.hearts(FT.hearts, TUNE.hearts, { show, hit, down: down() });
+  }
+  // 체력 게이지가 읽는 값 (hpbar.js, 매 프레임)
+  function gauge() {
+    return {
+      show: on() || FT.out, hp: FT.hp, max: TUNE.hpMax, down: down(), out: FT.out, hitSeq: FT.hitSeq, lastDmg: FT.lastDmg,
+      diff: TUNE.diff, diffName: TUNE.diffName, guard: FT.guard, paused: !!G.paused,
+    };
   }
 
   // ---------------------------------------------------------------- per frame: name tags, "!" marks, blink
@@ -557,6 +656,7 @@ export function createFight(D) {
   }
   function frame() {
     updateShield();
+    try { updateHpBar(); } catch (e) { /* 게이지 그리기 실패는 싸움에 영향 없음 */ }
     const S = G.S;
     const show = !!S && G.rampage && G.mode !== 'title';
     if (S) for (const n of S.npcs) {
@@ -600,17 +700,20 @@ export function createFight(D) {
     return null;
   }
   function reset() {
-    FT.hearts = TUNE.hearts; FT.invuln = 0; FT.downT = 0; FT.getUpT = 0; FT.guard = false; FT.guardWant = false; FT.guardT0 = -9; FT.lastHit = -99; FT.regenT = 0;
+    refreshDiff();
+    FT.hp = TUNE.hpMax; FT.invuln = 0; FT.downT = 0; FT.getUpT = 0; FT.guard = false; FT.guardWant = false; FT.guardT0 = -9; FT.lastHit = -99;
     FT.started = false; FT.perfects = 0; FT.blocks = 0; FT.hitsTaken = 0; FT.flops = 0; FT.attackers = 0; FT.maxAttackers = 0; FT.kb.set(0, 0, 0); FT.bubble = null;
+    FT.dmgTaken = 0; FT.out = false; FT.outT = 0; FT.lastDmg = 0; FT.wasOn = false;
     star.starsOn = false;
     if (FT.blink) { P.char.group.visible = true; FT.blink = 0; }
     for (const s of shots) if (s.mesh.parent) s.mesh.parent.remove(s.mesh);
     shots.length = 0;
-    D.ui.hearts(FT.hearts, TUNE.hearts, { show: false });
+    if (D.ui && D.ui.hearts) D.ui.hearts(FT.hearts, TUNE.hearts, { show: false });
   }
   // the minute is up / the bill: back on your feet, nothing pending
   function stop() {
     FT.downT = 0; FT.getUpT = 0; FT.guard = false; FT.invuln = 0; FT.kb.set(0, 0, 0); FT.bubble = null; star.starsOn = false;
+    FT.out = false; FT.outT = 0;
     if (FT.blink) { P.char.group.visible = true; FT.blink = 0; }
   }
   // debug / tests: make someone a fighter, make them swing right now
@@ -624,13 +727,18 @@ export function createFight(D) {
   }
   function state() {
     return {
+      hp: Math.round(FT.hp * 10) / 10, hpMax: TUNE.hpMax, diff: TUNE.diff, koRule: TUNE.koRule, out: FT.out, fails: FT.fails, dmgTaken: Math.round(FT.dmgTaken),
       hearts: FT.hearts, max: TUNE.hearts, guard: FT.guard, guardWant: FT.guardWant, down: FT.downT > 0, gettingUp: FT.getUpT > 0, invuln: +Math.max(0, FT.invuln).toFixed(2),
       attackers: FT.attackers, maxAttackers: FT.maxAttackers, perfects: FT.perfects, blocks: FT.blocks, hitsTaken: FT.hitsTaken, flops: FT.flops, started: FT.started,
       shots: shots.filter((s) => !s.rest).length,
     };
   }
+  // 체력 게이지: 스스로 화면에 붙고 매 프레임 gauge() 를 읽는다 (main.js 가 따로 부를 것 없음)
+  try { initHpBar(gauge); } catch (e) { if (D.report) D.report(e); }
   return {
-    FT, TUNE, RANK, on, designate, anger, nameOf, bossName, midName, meName, onFight, npcTick, update, frame, setGuard, playerAnim, playerBubble,
+    FT, TUNE, RANK, on, designate, gauge, refreshDiff, applyDiff,
+    // 'retry' 로 쓰러진 상태인지 (main.js: 다시 하기 띄우기)
+    isOut: () => FT.out, anger, nameOf, bossName, midName, meName, onFight, npcTick, update, frame, setGuard, playerAnim, playerBubble,
     hitPlayer, reset, stop, make, attackNow, state, hud, playerDown: down, canAttack: () => !FT.guard && !down(),
     moveScale: () => (down() ? 0 : FT.guard ? TUNE.guardSpeed : 1),
     resetMaxAttackers() { FT.maxAttackers = 0; },

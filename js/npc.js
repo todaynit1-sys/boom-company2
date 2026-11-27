@@ -211,17 +211,19 @@ export class NPC {
       return 2;
     }
     // a fighter mid wind-up grits their teeth: 멘탈 still drops, but no flinch / knock-back — the swing comes anyway
-    // (so the "!" means: guard or step away; trading blows still wins, it just costs a heart now and then)
+    // (so the "!" means: guard or step away; trading blows still wins, it just costs some 체력 now and then)
     if (this.state === 'windup' && this.fighter && kind !== 'special') {
       this.squashT = 0; this.char.setFace('rage');
       if (Math.random() < 0.5) this.say(pick(['안 아파!', '끄떡없어!', '간지러워!', '어림없다!']), 1.0, ctx.now);
       ctx.sfx('yelp', { pitch: rnd(0.75, 0.9), vol: 0.45 });
       return 1;
     }
-    // 보스·중간보스 shrug off most plain punches (no stun-lock by mashing): only every 3rd (boss) / 2nd (mid) one staggers
+    // 보스·중간보스 shrug off most plain punches (no stun-lock by mashing): only every Nth one staggers
+    // (fighter.armor from the difficulty — 보통: 보스 3 · 중간보스 2, 어려움 5 · 3, 쉬움 2 · 1)
     if (this.fighter && this.fighter.rank !== 'angry' && power < 0.7 && kind !== 'special' && kind !== 'shout' && kind !== 'spray' && !wasSeated && this.fights(ctx)) {
       this.armorHits = (this.armorHits || 0) + 1;
-      if (this.armorHits % (this.fighter.rank === 'boss' ? 3 : 2) !== 0) {
+      const armor = this.fighter.armor || (this.fighter.rank === 'boss' ? 3 : 2);
+      if (this.armorHits % armor !== 0) {
         this.squashT = 0; this.char.playOnce('land'); this.char.setFace('rage');
         if (Math.random() < 0.35) this.say(pick(['안 아파!', '그게 다야?', '어림없다!', '간지러워!']), 1.0, ctx.now);
         ctx.sfx('yelp', { pitch: rnd(0.7, 0.85), vol: 0.45 });
