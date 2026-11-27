@@ -103,7 +103,11 @@ Floor hooks can count anything with `game.emit(kind, rec)` (bumps `kind`, `kind:
   wall/ceiling mounted things with mass (cctv, banner, portrait, mirrorball) drop when hit.
 
 ## Scene (optional story situation)
-Slotted into the day by `time` (`오전/낮/오후 h:mm`); existing: 10:30 copier, 12:10 coffee, 17:50 퇴근 5분 전.
+본게임은 **레벨**이다: 상황 하나 = 레벨 하나 (`main.js → LEVELS`, 하루의 시간 순서로 1~8). 레벨은 상황 → 스트레스 100% →
+상황이 끝난 층에서 1분 난동 → 결과(별 3개: 끝까지 버티기 · 목표 피해액 · 안 쓰러지기) 순서. 새 상황을 넣으면 `LEVELS`에
+`{ scene: id, fl: '층 이름', fight: { boss, mid, angry }, goal, tag }` 한 줄을 더한다 (낮은 레벨은 보스 · 중간보스를 쉬게 함).
+`time` (`오전/낮/오후 h:mm`) is the clock on the level card; existing: 10:30 copier, 11:20 임원 보고, 12:10 coffee, 13:10 옥상,
+14:00 대강당, 15:00 B2, 16:40 B1, 17:50 퇴근 5분 전. (`__ppg.start('story', { len: 'long' })` still plays the whole day for tests.)
 ```js
 scene: { id: 'hallSetup', time: '오후 2:00', title: '시무식 의자 깔기', sub: '“의자 200개, 오늘 안에”',
   start: { floor: 'office', seat: 'playerSeat', preset: 'day', music: 'office', stress: 50 },   // or at: [x,z] | 'anchor'
@@ -173,7 +177,9 @@ while knocked out. Challenge kind `ko` counts distinct people knocked out: `{ id
 role with `role: 'boss'` (= `type`; key `ko:boss`). Rush adds "<보스 이름> 기절시키기" by itself when a floor has a boss and no `ko` goal.
 
 ## People who fight back (반격) — `js/fight.js`
-Only in a rampage (rush / free / the story's last minute), never in scripted scenes. Per floor (`fight.designate`):
+Only in a rampage (rush / 보스전 / free / a level's minute), never in scripted scenes. Levels switch the 보스 / 중간보스 off on
+early levels and add angry coworkers later (`LEVELS[].fight`, × 난이도 `angryMul`); 1분 보스전 (`mode 'boss'`, 7층) sends both
+straight at you and pays 격파 보너스 (보스 300,000 / 중간보스 150,000 × `moneyMul`). Per floor (`fight.designate`):
 the **보스** = the `boss` / `ceo` role (멘탈 8), one **중간보스** = the npc with `rank: 'mid'` (`ctx.npc(…, { rank: 'mid' })`),
 else the first `exec` / `guard`, else a standing worker (멘탈 6, KO pays 60,000 위자료), and one random hot-headed worker
 who snaps after the first hit. They square up (`fightIdle`), wind up ≥ 0.75 s ("!" + `windup` sfx + pose), swing with a

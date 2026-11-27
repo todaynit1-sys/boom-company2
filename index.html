@@ -24,7 +24,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="css/style.css?v=10">
+<link rel="stylesheet" href="css/style.css?v=11">
 <script type="importmap">
 {
   "imports": {
@@ -113,18 +113,17 @@
         <p class="tagline">참다 참다 터지는 하루</p>
       </div>
       <div class="t-menu">
-        <div class="story-wrap">
-          <button type="button" class="mbtn m-story" data-mode="story">
-            <b>출근하기</b><small id="t-len-sub">하루 이야기 · 상황 3개 · 약 4분</small><em id="t-days" hidden></em>
-          </button>
-          <div class="seg t-len" id="t-len" role="group" aria-label="하루 길이">
-            <button type="button" data-len="short">짧게 · 상황 3개</button>
-            <button type="button" data-len="long">길게 · 상황 8개</button>
+        <div class="t-diff" id="t-diff" role="radiogroup" aria-label="난이도"></div>
+        <button type="button" class="mbtn m-story" id="t-story">
+          <b>출근하기</b><small id="t-lv-sub">레벨 1~8 · 하루를 레벨로</small><em id="t-days" hidden></em>
+        </button>
+        <div class="mbtn m-rush">
+          <div class="r-hd"><b>1분 난동</b><small>60초 동안 다 뒤집기</small></div>
+          <div class="rush2" role="group" aria-label="1분 난동 종류">
+            <button type="button" data-mode="rush"><b>일반</b><small id="t-best">기록 없음</small></button>
+            <button type="button" data-mode="boss"><b>보스전</b><small id="t-best-boss">기록 없음</small></button>
           </div>
         </div>
-        <button type="button" class="mbtn m-rush" data-mode="rush">
-          <b>1분 난동</b><small id="t-best">최고 기록 없음 · 첫 기록을 남겨 보세요</small>
-        </button>
         <div class="mbtn m-free">
           <b>자유 난동</b><small>시간 제한 없이, 층을 골라요</small>
           <div class="floors" role="group" aria-label="층 고르기">
@@ -140,10 +139,13 @@
         </div>
       </div>
       <div class="t-opts">
-        <div class="seg" id="t-gender" role="group" aria-label="캐릭터">
-          <span class="seg-lbl">캐릭터</span>
-          <button type="button" data-g="m">남</button>
-          <button type="button" data-g="f">여</button>
+        <div class="t-row">
+          <div class="seg" id="t-gender" role="group" aria-label="캐릭터">
+            <span class="seg-lbl">캐릭터</span>
+            <button type="button" data-g="m">남</button>
+            <button type="button" data-g="f">여</button>
+          </div>
+          <button type="button" class="nm-btn" id="t-names"><b>이름 정하기</b><small id="t-names-sub">부장님 · 과장님</small></button>
         </div>
         <div class="toggles">
           <button type="button" class="tg" data-set="sfx">효과음</button>
@@ -151,9 +153,21 @@
           <button type="button" class="tg" data-set="vibe">진동</button>
           <button type="button" class="tg" data-set="calm">흔들림 약하게</button>
         </div>
-        <button type="button" class="nm-btn" id="t-names"><b>이름 정하기</b><small id="t-names-sub">부장님 · 과장님</small></button>
       </div>
       <p class="t-help" id="t-help"></p>
+    </div>
+  </div>
+
+  <!-- 레벨 선택 -->
+  <div id="levels" class="modal" hidden>
+    <div class="lv-card-wrap" role="dialog" aria-labelledby="lv-h">
+      <div class="lv-head">
+        <h3 id="lv-h">레벨 선택</h3>
+        <span class="lv-stars" id="lv-stars"></span>
+      </div>
+      <div class="t-diff lv-diff" id="lv-diff" role="radiogroup" aria-label="난이도"></div>
+      <div class="lv-scroll"><div class="lv-grid" id="lv-grid"></div></div>
+      <button type="button" class="btn ghost" id="lv-close">닫기</button>
     </div>
   </div>
 
@@ -194,8 +208,9 @@
       <div class="receipt">
         <div class="r-scroll">
           <p class="r-co" id="r-co"></p>
-          <h3 class="r-h">피해 청구서</h3>
+          <h3 class="r-h" id="r-h">피해 청구서</h3>
           <p class="r-meta" id="r-meta"></p>
+          <div class="r-stars" id="r-stars" hidden></div>
           <table class="r-items"><tbody id="r-items"></tbody></table>
           <div class="r-total"><span>합계</span><b id="r-total"></b></div>
           <p class="r-best" id="r-best"></p>
@@ -205,7 +220,9 @@
         </div>
       </div>
       <div class="b-btns">
+        <button type="button" class="btn primary" id="b-next" hidden>다음 레벨</button>
         <button type="button" class="btn primary" id="b-retry">다시 하기</button>
+        <button type="button" class="btn ghost" id="b-levels" hidden>레벨 선택</button>
         <button type="button" class="btn share" id="b-share">자랑하기</button>
         <button type="button" class="btn ghost" id="b-title">처음으로</button>
       </div>
@@ -215,16 +232,18 @@
   <!-- 장면 전환 시계 카드 -->
   <div id="fade" hidden>
     <div class="f-card">
+      <p class="f-lv" id="f-lv"></p>
       <div class="clock"><i class="h"></i><i class="m"></i><span class="dot"></span></div>
       <p class="f-time" id="f-time"></p>
       <h3 class="f-title" id="f-title"></h3>
       <p class="f-sub" id="f-sub"></p>
+      <p class="f-goal" id="f-goal"></p>
     </div>
   </div>
 
   <div id="boot"><div><p class="logo sm"><span class="l1">회사</span><span class="l2">뿌개기</span></p><p class="boot-t">불러오는 중…</p></div></div>
 </div>
 
-<script type="module" src="js/main.js?v=10"></script>
+<script type="module" src="js/main.js?v=11"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
-// Story mode played with REAL key events: a steering helper reads the nav path (read-only) and presses
-// W/A/S/D like a person would, holds E on prompts, and clicks elevator floor buttons with the mouse.
+// 본게임(레벨) played with REAL key events: a steering helper reads the nav path (read-only) and presses
+// W/A/S/D like a person would, holds E on prompts, and clicks elevator floor buttons / level cards with the mouse.
+// 레벨 1 (복합기) · 2 (임원 보고, 건너뛰기) · 3 (커피 심부름) · 8 (퇴근 5분 전). ALL=1 이면 층 상황 레벨 2 · 4~7 도 끝까지.
 import { makeInput } from './inp.mjs';
 export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   const I = makeInput({ send, ev, sleep });
@@ -83,15 +84,29 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     }
     return s;
   }
-  // 하루 길이: STORY_LEN=short → 짧게 (copier, coffee, 퇴근 5분 전); default 길게 (all eight by the clock)
-  const LONG = process.env.STORY_LEN !== 'short';
+  // 레벨 판 끝내기: 난동 시계를 0으로 → 결과(청구서)까지
+  async function endRun(tag) {
+    await ev('__ppg.G.timeLeft = Math.min(__ppg.G.timeLeft || 0.2, 0.2); true');
+    let st; for (let i = 0; i < 40; i++) { st = await step(15, 15); if (st.scene === 'bill') break; }
+    st = await step(40, 20);
+    expect(st.scene === 'bill' && st.bill && st.bill.level, `${tag}: result card with stars (${st.bill && st.bill.level && st.bill.level.stars}★)`);
+    return st;
+  }
+  async function pickLevel(n) {
+    if (await ev('document.getElementById("levels").hidden')) {
+      if (await ev('!document.getElementById("bill").hidden')) await I.clickSel('#b-levels');
+      else await I.clickSel('#t-story');
+    }
+    await I.waitFor('!document.getElementById("levels").hidden', 8000);
+    await I.clickSel(`#lv-grid .lv-card[data-lv="${n}"]`);
+  }
+  // ALL=1: 층 상황 레벨(2 · 4 · 5 · 6 · 7)도 마커를 따라 진짜 키로
+  const ALL = process.env.ALL === '1';
   await I.waitFor('!document.getElementById("title").hidden && document.getElementById("boot").hidden', 15000);
-  await I.clickSel(`#t-len [data-len="${LONG ? 'long' : 'short'}"]`);
-  expect(await ev(`document.querySelector('#t-len [data-len="${LONG ? 'long' : 'short'}"]').getAttribute('aria-pressed') === 'true'`), `title: 하루 길이 ${LONG ? '길게' : '짧게'} selected by click`);
-  await I.clickSel('#title [data-mode="story"]');
+  // ---- 레벨 1 · 복합기 용지 걸림 (출근하기 → 레벨 선택 → 레벨 1)
+  await pickLevel(1);
   let s = await waitScene((s) => s.scene === 'copier' && s.phase === 'walk' && !s.busy);
   log('copier walk', JSON.stringify(s.player), JSON.stringify(s.objective), s.tasks);
-  const taskText0 = await ev('document.getElementById("tasks").textContent');
   // ---- copier ×3
   for (let k = 0; k < 3; k++) {
     const pr = await ev('(() => { const r = __ppg.G.S.F.anchors.printer.rec.body.position; return [r.x, r.z]; })()');
@@ -107,10 +122,24 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     expect(s.phase === 'pulled', `hold E pulls the paper (#${k + 1}) phase=${s.phase}`);
     if (k < 2) s = await waitScene((s) => s.phase === 'walk');
   }
-  s = await waitScene((s) => s.scene !== 'copier' && !s.busy, 40000);
-  s = await follow((s) => s.scene === 'coffee' && s.phase === 'toLobby' && !s.busy, s);
-  const taskText1 = await ev('document.getElementById("tasks").textContent');
-  expect(taskText0 !== taskText1, `task list updates between scenes ("${taskText0}" → "${taskText1}")`);
+  s = await waitScene((s) => s.scene === 'rampage' && !s.busy, 60000);
+  expect(s.floor === 'office' && s.mode === 'story', 'level 1: copier → stress 100% → rampage on 7층');
+  s = await endRun('level 1');
+
+  // ---- 레벨 2 · 임원 보고 (다음 레벨 버튼) — ALL=1 이면 마커를 따라 끝까지
+  await I.clickSel('#b-next');
+  s = await waitScene((s) => s.scene === 'execReport' && !s.busy);
+  expect(true, '다음 레벨 → level 2 (임원 보고)');
+  if (ALL) {
+    s = await follow((s) => s.scene === 'rampage' || s.phase === 'boil', s);
+    s = await waitScene((s) => s.scene === 'rampage' && !s.busy, 20000);
+    expect(s.floor === 'exec', 'level 2 rampage on 12층 (' + s.floor + ')');
+  } else { await ev('__ppg.skip()'); s = await waitScene((s) => s.scene === 'rampage' && !s.busy, 20000); }
+  s = await endRun('level 2');
+
+  // ---- 레벨 3 · 커피 심부름 (레벨 선택 창에서 클릭)
+  await pickLevel(3);
+  s = await waitScene((s) => s.scene === 'coffee' && s.phase === 'toLobby' && !s.busy);
   await shot('is-2-coffee');
   // ---- to the elevator, panel, click 1층
   let evp = s.objective;
@@ -147,13 +176,28 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   s = await walkTo(bp.x, bp.z, { near: 1.2, cond: (s) => s.focus === '커피 드리기', tag: 'boss' });
   s = await holdE();
   expect(s.phase === 'delivered', 'hold E delivers the coffee');
-  // ---- situations contributed by floor modules (e.g. B2 「사장님 차 빼 주기」): follow the marker with real keys
-  s = await waitScene((s) => s.scene !== 'coffee' && !s.busy, 40000);
-  s = await follow((s) => s.scene === 'sunset', s);
-  for (const k of ['sunset', 'coffee', 'copier']) played.delete(k);
-  log('floor scenes played', [...played].join(','));
-  if (LONG) expect(played.size >= 5, 'long day: the five floor-module situations play (' + [...played].join(',') + ')');
-  else expect(played.size === 0, 'short day: no floor-module situation (' + [...played].join(',') + ')');
+  s = await waitScene((s) => s.scene === 'rampage' && !s.busy, 60000);
+  expect(s.floor === 'office', 'level 3: coffee delivered → rampage');
+  const midN = (s.fighters || []).filter((f) => f.rank === 'mid').length, bossN = (s.fighters || []).filter((f) => f.rank === 'boss').length;
+  expect(midN === 1 && bossN === 0, `level 3: 중간보스 fights, 보스 stays out (${JSON.stringify(s.fighters)})`);
+  s = await endRun('level 3');
+
+  // ---- ALL=1: 층 상황 레벨 4 ~ 7 (마커를 따라)
+  if (ALL) {
+    await ev('__ppg.unlock()');
+    for (const [n, id, fl] of [[4, 'roofLettuce', 'roof'], [5, 'hallSetup', 'hall'], [6, 'parkingCar', 'parking'], [7, 'pubBooking', 'pub']]) {
+      await pickLevel(n);
+      s = await waitScene((s) => s.scene === id && !s.busy);
+      s = await follow((s) => s.scene === 'rampage' || s.phase === 'boil', s);
+      s = await waitScene((s) => s.scene === 'rampage' && !s.busy, 20000);
+      expect(s.floor === fl, `level ${n} (${id}) → rampage on ${fl} (${s.floor})`);
+      s = await endRun('level ' + n);
+    }
+  }
+
+  // ---- 레벨 8 · 퇴근 5분 전 (최종 보스)
+  await ev('__ppg.unlock()');
+  await pickLevel(8);
   s = await waitScene((s) => s.scene === 'sunset' && s.phase === 'leave' && !s.busy, 40000);
   await shot('is-6-sunset');
   // ---- sunset: head for the elevator, get intercepted
@@ -172,19 +216,16 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
   expect(s.phase === 'boil', 'hold E takes the binders → boil');
   s = await waitScene((s) => s.scene === 'rampage', 20000);
   s = await step(30);
+  expect((s.fighters || []).some((f) => f.rank === 'boss'), 'level 8: 보스 fights back');
   const r0 = s.player;
   await I.down('KeyW'); s = await step(60); await I.up('KeyW');
   expect(Math.hypot(s.player.x - r0.x, s.player.z - r0.z) > 1.0, 'free to run once the rampage starts');
   await I.tap('KeyJ'); await step(30);
   await shot('is-8-rampage');
   log('story keys final', JSON.stringify({ scene: s.scene, money: s.money, timeLeft: s.timeLeft }));
-  // situation order (each gotoScene logs the one that just ended + its stress) and the stress curve
-  const sl = (await ev('__ppg.stressLog()')).filter((e) => e[0] !== 'title');
-  const order = sl.map((e) => e[0]);
-  log('situations', JSON.stringify(sl));
-  const want = LONG ? ['copier', 'execReport', 'coffee', 'roofLettuce', 'hallSetup', 'parkingCar', 'pubBooking', 'sunset'] : ['copier', 'coffee', 'sunset'];
-  expect(JSON.stringify(order) === JSON.stringify(want), `${LONG ? 'long' : 'short'} day plays ${want.length} situations in clock order (${order.join(' → ')})`);
-  const pre = sl.filter((e) => e[0] !== 'sunset');
-  expect(pre.every((e, i) => i === 0 || e[1] >= pre[i - 1][1]) && pre.every((e) => e[1] < 100), 'stress rises monotonically and stays < 100 before 퇴근 5분 전 ' + JSON.stringify(sl.map((e) => e[1])));
+  s = await endRun('level 8');
+  expect(!(await ev('!document.getElementById("b-next").hidden')), 'last level: no 다음 레벨 button');
+  await sleep(900);
+  await shot('is-9-last-result');
   if (fails.length) throw new Error(fails.length + ' checks failed: ' + fails.join(' | '));
 };

@@ -13,6 +13,7 @@ import { NPC } from './npc.js';
 import { instanceFloor } from './inst.js';
 import { createToys, WEAPON, RIDE } from './toys.js';
 import { createFight } from './fight.js';
+import * as DIFF from './diff.js'; // 난이도 (쉬움 · 보통 · 어려움): koRule, moneyMul, angryMul … (값은 diff.js)
 
 const PI = Math.PI;
 // #debug (may share the hash with a name link: #debug&nb=…)
@@ -40,10 +41,31 @@ const G = {
 let toys = null; // js/toys.js — created once the game helpers below exist
 let fight = null; // js/fight.js — 반격 · 막기 · 기력 (created with toys)
 const save = loadSave();
+// 저장 'ppg.save': { best: { rush, boss, free, story }, days, lv: { '1': { stars, best, clear }, … } }
+// 예전 저장(best · days 뿐)이나 망가진 값도 받아 준다: 모르는 칸은 기본값, 숫자는 숫자로
 function loadSave() {
-  try { const s = JSON.parse(localStorage.getItem('ppg.save') || 'null'); if (s && typeof s === 'object') return { best: Object.assign({}, s.best || {}), days: s.days | 0 }; } catch (e) { /* ignore */ }
-  return { best: {}, days: 0 };
+  const out = { best: {}, days: 0, lv: {} };
+  try {
+    const s = JSON.parse(localStorage.getItem('ppg.save') || 'null');
+    if (s && typeof s === 'object') {
+      if (s.best && typeof s.best === 'object') for (const k of Object.keys(s.best)) { const v = Number(s.best[k]); if (v > 0 && isFinite(v)) out.best[k] = Math.round(v); }
+      out.days = Math.max(0, s.days | 0);
+      if (s.lv && typeof s.lv === 'object') {
+        for (const k of Object.keys(s.lv)) {
+          const e = s.lv[k], n = k | 0;
+          if (!e || typeof e !== 'object' || n < 1 || n > 99) continue;
+          out.lv[n] = { stars: clamp(e.stars | 0, 0, 3), best: Math.max(0, Math.round(Number(e.best) || 0)), clear: !!e.clear || (e.stars | 0) > 0 };
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return out;
 }
+// 난이도 값 (diff.js 가 없거나 깨져도 '보통'처럼)
+function DD() { try { return (DIFF.D && DIFF.D()) || {}; } catch (e) { return {}; } }
+const koRule = () => (DD().koRule === 'retry' ? 'retry' : 'getup');
+const moneyMul = () => { const m = Number(DD().moneyMul); return m > 0 && isFinite(m) ? m : 1; };
+function diffName() { const d = DD(); return d.n || ({ easy: '쉬움', normal: '보통', hard: '어려움' })[d.id] || '보통'; }
 function writeSave() { try { localStorage.setItem('ppg.save', JSON.stringify(save)); } catch (e) { /* ignore */ } }
 function report(e) {
   if (G.errors.length < 60) G.errors.push(String((e && (e.stack || e.message)) || e).slice(0, 600));
@@ -275,6 +297,7 @@ function getFloor(kind) {
   S.lists = [F.rects, S.obst];
   for (const sp of F.npcs) { const n = new NPC(sp); S.npcs.push(n); F.group.add(n.group); }
   fight.designate(S); // 보스 · 중간보스 (+ one hot-headed coworker) fight back in a rampage
+  applyRunFight(S); // 레벨마다 누가 덤비는지 (낮은 레벨: 보스 · 중간보스 쉼)
   for (const w of F.walkers) {
     const n = new NPC({ preset: w.preset, x: w.x, z: w.z, rotY: PI / 2, anim: 'walk', role: 'walker', variantSeed: w.variantSeed, id: kind + ':w' + S.walkers.length, speed: w.speed, x0: w.x0, x1: w.x1 });
     n.state = 'stroll'; n.dir = w.dir; n.char.setAnim('walk');
@@ -768,10 +791,76 @@ for (const f of FLOORS) {
     skip() { G.run = null; sceneNext(); },
   };
 }
-// 길게 = every situation by the clock (8 with all floors), 짧게 (default) = copier, coffee, 퇴근 5분 전
+// 하루 전체 (시험 · 디버그 전용: __ppg.start('story', { len: 'long' | 'short' })). 화면에서는 레벨로만 고른다.
+// long = every situation by the clock (8 with all floors), short = copier, coffee, 퇴근 5분 전
 const STORY_LONG = Object.keys(STORY).sort((a, b) => clockHours(STORY[a].info.time) - clockHours(STORY[b].info.time)).concat(['rampage', 'bill']);
 const STORY_SHORT = ['copier', 'coffee', 'sunset', 'rampage', 'bill'];
 STORY_ORDER = STORY_SHORT;
+
+// ================================================================ 레벨 (본게임)
+// 레벨 하나 = 상황 하나 (하루의 시간 순서) → 스트레스 100% → 그 층에서 1분 난동 → 결과(별 0~3).
+// 쉬운 레벨은 보스 · 중간보스가 덤비지 않고, 갈수록 욱하는 직원 · 중간보스 · 보스가 붙는다. 난이도(diff.js)는 그 위에 곱해진다.
+//   fight: boss / mid = 이 판에 덤비는지, angry = 처음부터 덤비는 평직원 수 (× 난이도 angryMul)
+//   goal = ★ 목표 피해액, fl = 난동이 벌어지는 층 (카드 · 레벨 선택 표시)
+// 별: ★ 끝까지 버티기(클리어) · ★ 목표 피해액 · ★ 한 번도 안 쓰러지기. 어려움(koRule 'retry')은 쓰러지면 그 판 실패.
+const LEVELS = [
+  { scene: 'copier', fl: '7층', fight: { boss: false, mid: false, angry: 0 }, goal: 400000, tag: '' },
+  { scene: 'execReport', fl: '12층', fight: { boss: false, mid: false, angry: 1 }, goal: 500000, tag: '욱하는 직원' },
+  { scene: 'coffee', fl: '7층', fight: { boss: false, mid: true, angry: 0 }, goal: 600000, tag: '중간보스' },
+  { scene: 'roofLettuce', fl: '옥상', fight: { boss: false, mid: true, angry: 1 }, goal: 700000, tag: '중간보스' },
+  { scene: 'hallSetup', fl: '3층', fight: { boss: false, mid: true, angry: 2 }, goal: 800000, tag: '중간보스' },
+  { scene: 'parkingCar', fl: 'B2', fight: { boss: false, mid: true, angry: 2 }, goal: 900000, tag: '중간보스' },
+  { scene: 'pubBooking', fl: 'B1', fight: { boss: true, mid: true, angry: 1 }, goal: 1000000, tag: '보스' },
+  { scene: 'sunset', fl: '7층', fight: { boss: true, mid: true, angry: 2 }, goal: 1200000, tag: '최종 보스' },
+].filter((L) => STORY[L.scene]);
+const LEVEL_N = LEVELS.length;
+const BOSS_BONUS = { boss: 300000, mid: 150000 }; // 보스 · 중간보스를 처음 쓰러뜨리면 (보스전 · 레벨)
+function levelOf(n) { return LEVELS[clamp(n | 0, 1, LEVEL_N) - 1]; }
+function lvSave(n) { return save.lv[n] || { stars: 0, best: 0, clear: false }; }
+function levelOpen(n) { return n <= 1 || (n <= LEVEL_N && !!lvSave(n - 1).clear); }
+function starsTotal() { let s = 0; for (let i = 1; i <= LEVEL_N; i++) s += lvSave(i).stars; return s; }
+function levelRows() {
+  return LEVELS.map((L, i) => {
+    const n = i + 1, inf = STORY[L.scene].info, sv = lvSave(n);
+    return { n, title: inf.title, time: inf.time, fl: L.fl, tag: L.tag, goal: L.goal, open: levelOpen(n), stars: sv.stars, best: sv.best, clear: sv.clear, boss: !!L.fight.boss, mid: !!L.fight.mid };
+  });
+}
+function nextLevel() { let n = 1; while (n < LEVEL_N && lvSave(n).clear) n++; return n; }
+function levelFightLine(L) {
+  const f = L.fight, out = [];
+  if (f.boss) out.push('보스'); if (f.mid) out.push('중간보스');
+  if (f.angry) out.push('욱하는 직원');
+  if (!out.length) return '아직은 다들 도망만 가요';
+  return out.join(' · ') + (out[out.length - 1].endsWith('직원') ? '이' : '가') + ' 덤벼요';
+}
+// 이 판에서 누가 덤비나: 레벨 설정대로 보스 · 중간보스를 쉬게 하고, 욱하는 직원을 더한다 (층마다 한 번)
+function applyRunFight(S) {
+  if (!S || !fight || S.runFight === G.runId) return;
+  S.runFight = G.runId;
+  const L = G.mode === 'story' && G.level ? levelOf(G.level) : null;
+  if (!L) return;
+  for (const n of S.npcs) {
+    if (!n.fighter) continue;
+    if ((n.fighter.rank === 'boss' && !L.fight.boss) || (n.fighter.rank === 'mid' && !L.fight.mid)) n.fighter = null;
+  }
+  const am = Number(DD().angryMul); let extra = Math.round((L.fight.angry || 0) * (am >= 0 && isFinite(am) ? am : 1));
+  const pool = S.npcs.filter((n) => n.role === 'worker' && !n.fighter && !n.gone).sort((a, b) => (a.seated ? 1 : 0) - (b.seated ? 1 : 0));
+  for (const n of pool) { if (extra <= 0) break; try { if (fight.make(n, 'angry')) { n.hothead = false; extra--; } } catch (e) { report(e); break; } }
+}
+// 을/를 (이름 끝 글자에 받침이 있으면 을) — 사용자가 정한 이름에도 맞게
+function eul(w) { const t = String(w || ''), c = t.charCodeAt(t.length - 1); return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 === 0 ? '를' : '을'; }
+// 난동 화면 제목 (HUD · 엘리베이터를 타도 그대로)
+// 레벨 시작 카드: "레벨 3 · 7층 · 보통" / 낮 12:10 / 커피 심부름 / 대사 / 목표
+function levelCard(n) {
+  const L = levelOf(n), inf = STORY[L.scene].info;
+  return { lv: `레벨 ${n} · ${L.fl} · ${diffName()}`, time: inf.time, title: inf.title, sub: inf.sub, goal: `★ 목표 피해액 ${fmt(L.goal)}원 · ${levelFightLine(L)}` };
+}
+function rampTitle() {
+  if (G.mode === 'free') return '자유 난동';
+  if (G.mode === 'boss') return '1분 보스전';
+  if (G.mode === 'story' && G.level) return `레벨 ${G.level} · 1분 난동`;
+  return '1분 난동';
+}
 // story stress: never goes down between situations and the k-th of N situations tops out at
 // 100 − 58·(N−1−k)/(N−1) (short: 42 / 71 / 100, long: 42 … 92 / 100), so only the last one reaches 100
 function storyStressCap() {
@@ -880,6 +969,13 @@ function stepDone(s, R, dt) {
 }
 function phase(p) { G.phase = p; G.phaseT = 0; }
 function sceneNext() {
+  // 레벨: 상황 하나가 끝나면 바로 끓어오른다 (스트레스 100% → 이 층에서 1분 난동)
+  if (G.mode === 'story' && G.level && STORY[G.scene]) {
+    if (G.phase === 'boil') return;
+    G.run = null; objective(null); phase('boil'); unseat();
+    startRage();
+    return;
+  }
   let order = STORY_ORDER, i = order.indexOf(G.scene);
   if (i < 0) { order = STORY_LONG; i = order.indexOf(G.scene); } // (a situation reached with __ppg.goto)
   gotoScene(order[Math.min(order.length - 1, i + 1)]);
@@ -897,6 +993,7 @@ function gotoScene(id) {
   if (STORY[id]) {
     G.scene = id; G.rampage = false; G.canDamage = false; G.timeLeft = null;
     objective(null);
+    if (G.mode === 'story' && G.level) return transition(levelCard(G.level), () => STORY[id].setup(), 3000);
     return transition(STORY[id].info, () => STORY[id].setup());
   }
   if (id === 'rampage') {
@@ -1201,12 +1298,39 @@ function startRampage() {
   setStress(100, false);
   G.relief0 = 100;
   const info = FLOOR_INFO[G.floorKind];
-  ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: info.name, tone: 'rage' });
+  ui.mission({ title: rampTitle(), sub: info.name, tone: 'rage' });
   ui.timer(G.timeLeft);
+  G.kos = playerKos(); G.kos0 = G.kos; G.failed = null;
   initTasks(G.floorKind);
-  if (G.mode !== 'story') { ui.banner(G.mode === 'free' ? '자유 난동' : '1분 난동!', '다 뒤집어엎어라', 1600); sfx('whistle', { vol: 0.6 }); }
+  if (G.mode === 'boss') {
+    const S = G.S, bn = fight.bossName(S), mn = fight.midName(S);
+    ui.banner('보스전!', `${bn} · ${mn}${eul(mn)} 쓰러뜨려라`, 1800); sfx('whistle', { vol: 0.6 });
+    // 보스전: 보스 · 중간보스가 기다리지 않고 바로 찾아온다
+    after(1.2, () => { if (!G.rampage || !G.S) return; const c = npcCtx(); for (const n of G.S.npcs) if (n.fighter && (n.fighter.rank === 'boss' || n.fighter.rank === 'mid') && !n.gone && !n.isKo) { try { n.engage(c); } catch (e) { report(e); } } });
+  } else if (G.mode !== 'story') { ui.banner(G.mode === 'free' ? '자유 난동' : '1분 난동!', '다 뒤집어엎어라', 1600); sfx('whistle', { vol: 0.6 }); }
+  else if (G.level) after(0.2, () => ui.toast(`★ 목표 ${fmt(levelOf(G.level).goal)}원` + (koRule() === 'retry' ? ' · 쓰러지면 실패' : ''), 2400));
   // the yell startles people nearby
   after(0.4, () => alarmAt(P.pos, 5.5));
+}
+// 주인공이 쓰러진 횟수 (fight.js 의 flops, 없으면 '쓰러짐' 상태가 켜진 횟수를 직접 센다)
+function playerKos() {
+  let f = 0;
+  try { const st = fight.state(); f = Number(st.flops) || 0; const dn = !!(st.down || (fight.FT && fight.FT.downT > 0)); if (dn && !G.wasDown) G.downEdges = (G.downEdges || 0) + 1; G.wasDown = dn; } catch (e) { /* 무시 */ }
+  return Math.max(f, G.downEdges || 0);
+}
+// 난동 중 쓰러짐 감시: 어려움(retry)이면 레벨은 실패, 보스전은 그 자리에서 끝
+function watchKo() {
+  if (G.failed || !(G.mode === 'story' && G.level) && G.mode !== 'boss') return;
+  const k = playerKos();
+  if (k <= G.kos) return;
+  G.kos = k;
+  if (koRule() !== 'retry') return;
+  G.failed = 'ko';
+  G.rampage = false; G.canDamage = false; G.timeLeft = null; ui.timer(null);
+  P.controls = false;
+  ui.banner('퇴사 처리…', G.mode === 'boss' ? '쓰러지면 끝 · 어려움' : '어려움: 쓰러지면 이 레벨 실패', 2000);
+  sfx('whistle', { vol: 0.8, pitch: 0.7 });
+  after(2.0, () => { fight.stop(); showBill(); });
 }
 // each floor keeps its own challenge pool (and progress) for the whole run
 function initTasks(kind) {
@@ -1224,6 +1348,15 @@ function initTasks(kind) {
     // rotate the order a little so runs differ
     const k = (Math.random() * Math.min(3, pool.length)) | 0;
     pool = pool.slice(k).concat(pool.slice(0, k));
+    // 보스전: 이 층의 보스 · 중간보스 쓰러뜨리기가 맨 앞 (보너스는 쓰러뜨린 순간 따로 — BOSS_BONUS)
+    if (G.mode === 'boss' && FS) {
+      const head = [];
+      for (const rank of ['boss', 'mid']) {
+        const n = FS.npcs.find((m) => m.fighter && m.fighter.rank === rank && !m.gone);
+        if (n) head.push({ id: 'beat' + rank, text: `${fight.nameOf(n)} 쓰러뜨리기`, kind: 'count', key: 'beat:' + rank, need: 1, done: false, doneAt: 0, bonus: 0, noPay: true });
+      }
+      pool = head.concat(pool);
+    }
     C = G.chal[kind] = { pool, shown: pool.filter((t) => !t.done).slice(0, 2) };
   }
   G.taskPool = C.pool; G.taskShown = C.shown;
@@ -1239,9 +1372,11 @@ function checkTasks() {
     if (t.need > 1 && !t.done && p !== t.shownP && G.taskShown.includes(t)) { t.shownP = p; changed = true; }
     if (!t.done && p >= t.need) {
       t.done = true; t.doneAt = G.rtime; changed = true;
+      if (t.noPay) continue; // (보스전 머리 목표: 보너스는 쓰러뜨린 순간 npcKo 에서)
+      const pay = Math.round(t.bonus * moneyMul());
       addMoney(t.bonus, null, true);
       addItem('목표 보너스 · ' + t.text, t.bonus);
-      ui.toast(`${t.text} 달성! 보너스 +${fmt(t.bonus)}원`, 2000);
+      ui.toast(`${t.text} 달성! 보너스 +${fmt(pay)}원`, 2000);
       sfx('bonus', { vol: 0.8 });
     }
   }
@@ -1270,17 +1405,21 @@ function emit(kind, rec = null, n = 1, value = null) {
     else { G.counts[k] = (G.counts[k] || 0) + n; fc[k] = (fc[k] || 0) + n; }
   }
 }
+// 금액은 난이도 보상 배수(moneyMul)를 곱해 쌓는다 — 청구서 줄(addItem)과 합계(addMoney)가 같은 배수.
+// raw = 이미 곱해서 넘어오는 돈 (fight.js 의 딱! 보너스)
 function addItem(name, amount, people = false) {
   const it = G.items.get(name) || { name, count: 0, amount: 0, people };
-  it.count++; it.amount += amount; G.items.set(name, it);
+  it.count++; it.amount += Math.round(amount * moneyMul()); G.items.set(name, it);
 }
-function addMoney(amt, worldPos, quiet = false, charge = false, label = null) {
+function addMoney(amt, worldPos, quiet = false, charge = false, label = null, raw = false) {
   if (amt <= 0) return;
+  const base = amt;
+  if (!raw) amt = Math.round(amt * moneyMul());
   G.money += amt;
   ui.money(G.money, G.rampage || G.mode !== 'story' ? '피해 총액' : '피해액');
   if (worldPos) { const s = toScreen(worldPos); if (s) ui.moneyPop(s.x, s.y, amt, G.combo, label); }
   if (!quiet) G.payAcc = (G.payAcc || 0) + amt; // one cha-ching per tick, sized by the tick's total (payCue)
-  if (charge) G.special = Math.min(1, G.special + amt / 380000);
+  if (charge) G.special = Math.min(1, G.special + base / 380000);
   if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); }
   ui.special(G.special);
   // stress drains as damage accumulates (that is the relief)
@@ -1662,6 +1801,7 @@ function npcKo(n, phase) {
     }
     count('koAll');
     if (first) { count('ko'); emit('ko', { type: n.role }); }
+    if (first) bossBeaten(n);
     n.say(n.vip ? pickOne(['연봉… 올려… 줄게…', '휴가… 다 써도… 돼…', '자네… 승진… 이야…']) : pickOne(['꼬르륵…', '깨꼬닥…', '…(꽥)', '퇴근… 하고… 싶다…']), n.vip ? 3.6 : 2.8, G.rtime);
     if (n.vip) { n.char.setFace('ko'); bigMoment('crash', 4); }
     // witnesses gasp
@@ -1677,6 +1817,19 @@ function npcKo(n, phase) {
   else if (phase === 'dizzy') fx.koStars(n);
   else if (phase === 'keep') { if (n.starsOn) fx.koStars(n); if (n.ghostOn) fx.ghost(n); }
   else if (phase === 'trip') count('trip');
+}
+// 보스 · 중간보스를 처음 쓰러뜨림 (보스전 · 레벨): 격파 보너스 + 보스전 목표 칸
+function bossBeaten(n) {
+  const rank = n.fighter && n.fighter.rank;
+  if (rank !== 'boss' && rank !== 'mid') return;
+  if (!(G.mode === 'boss' || (G.mode === 'story' && G.level)) || !G.canDamage) return;
+  const nm = fight.nameOf(n), amt = BOSS_BONUS[rank];
+  count('beat:' + rank);
+  addMoney(amt, null, true); addItem(`${nm} 격파 보너스`, amt);
+  G.beaten = (G.beaten || 0) + 1;
+  ui.banner(`${nm} 격파!`, `보너스 +${fmt(amt * moneyMul())}원`, 1700);
+  sfx('bonus', { vol: 0.9 }); sfx('comboUp', { vol: 0.6 });
+  if (G.mode === 'boss' && G.S && !G.S.npcs.some((m) => m.fighter && (m.fighter.rank === 'boss' || m.fighter.rank === 'mid') && !m.beaten && !m.isKo && !m.gone)) after(1.9, () => G.rampage && ui.toast('둘 다 쓰러뜨렸다! 남은 시간은 마음껏 부수기', 2400));
 }
 const pickOne = (a) => a[(Math.random() * a.length) | 0];
 function npcGround(x, z) { const F = G.S && G.S.F; return F && F.grounds.length ? groundAt(F, x, z) : 0; }
@@ -1972,16 +2125,34 @@ function showBill() {
   G.scene = 'bill'; G.rampage = false; G.canDamage = false; G.timeLeft = null; G.homeWalk = null;
   ui.prompt(null); ui.timer(null); ui.combo(0); ui.elevator(null); ui.vignette(0); ui.subtitle(null, null);
   gfx.clearHighlight(); objective(null);
+  const kos = Math.max(G.kos || 0, playerKos()) - (G.kos0 || 0);
   fight.stop(); fight.hud(); ui.bubble('player', null); G.pBubble = false;
   releaseLock();
   const all = [...G.items.values()].sort((a, b) => b.amount - a.amount);
   const items = all.filter((it) => !it.people), people = all.filter((it) => it.people); // people: own bill section
   const total = Math.round(G.money);
-  const key = G.mode;
-  const prev = save.best[key] || 0;
-  const isBest = total > prev && total > 0;
-  if (isBest) save.best[key] = total;
-  if (G.mode === 'story') save.days = (save.days | 0) + 1;
+  // 레벨: 별 (★ 클리어 · ★ 목표 피해액 · ★ 안 쓰러짐), 레벨별 최고 기록, 다음 레벨 열기
+  let lv = null, prev, isBest;
+  if (G.mode === 'story' && G.level) {
+    const n = G.level, L = levelOf(n), sv = lvSave(n);
+    const fail = G.failed || null; // 'ko' (어려움에서 쓰러짐) | 'quit' (그만두기)
+    const got = fail ? [false, false, false] : [true, total >= L.goal, kos <= 0];
+    const stars = got.filter(Boolean).length;
+    const wasOpen = levelOpen(n + 1);
+    prev = sv.best; isBest = !fail && total > prev && total > 0;
+    if (!fail) {
+      save.lv[n] = { stars: Math.max(sv.stars, stars), best: Math.max(sv.best, total), clear: true };
+      save.days = (save.days | 0) + 1;
+      if (total > (save.best.story || 0)) save.best.story = total;
+    }
+    const unlocked = !fail && n < LEVEL_N && !wasOpen && levelOpen(n + 1);
+    lv = { n, title: STORY[L.scene].info.title, goal: L.goal, fail, stars, got, newStars: !fail && stars > sv.stars, hasNext: n < LEVEL_N, nextOpen: n < LEVEL_N && levelOpen(n + 1), unlocked, last: n === LEVEL_N, diff: diffName(), kos };
+  } else {
+    const key = G.mode;
+    prev = save.best[key] || 0;
+    isBest = total > prev && total > 0;
+    if (isBest) save.best[key] = total; // (보스전은 어려움에서 쓰러져 끝나도 그때까지 점수가 기록)
+  }
   writeSave();
   // free mode has no clock: rank the damage per minute played (at least one minute counts)
   let score = total, meta = '';
@@ -1992,19 +2163,25 @@ function showBill() {
   }
   let rank = RANKS[0];
   for (const r of RANKS) if (score >= r[0]) rank = r;
+  let title = rank[1], comment = rank[2];
+  if (G.mode === 'boss') meta = (G.beaten ? `보스 ${G.beaten}명 격파` : '보스 격파 못 함') + (G.failed ? ' · 쓰러져서 끝' : '');
+  if (lv && lv.fail === 'ko') { title = '퇴사 처리'; comment = '어려움에서는 쓰러지면 그 레벨이 끝나요. 막기(C)로 버텨 보세요.'; }
+  else if (lv && lv.fail === 'quit') { title = '조퇴 처리'; comment = '중간에 그만두면 별을 받을 수 없어요.'; }
+  else if (lv && lv.last) comment = '오늘 하루 끝! ' + comment;
   const relief = clamp(100 - G.stress, 0, 100);
   after(0.3, () => {
     ui.hud(false);
-    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, people, total, best: prev, isBest, relief, title: rank[1], comment: rank[2], meta, who: (ui.names && ui.names.me) || '' });
+    ui.bill({ mode: G.mode, company: '(주)가족같은회사', items, people, total, best: prev, isBest, relief, title, comment, meta, who: (ui.names && ui.names.me) || '', diff: diffName(), level: lv });
     audio.music('bill');
     after(0.5, () => sfx('stamp', { vol: 0.8 }));
-    after(0.9, () => sfx(isBest ? 'newRecord' : 'fanfare', { vol: 0.7 }));
+    after(0.9, () => sfx(lv && lv.fail ? 'sigh' : isBest || (lv && lv.newStars) ? 'newRecord' : 'fanfare', { vol: 0.7 }));
   });
   if (G.fast) runTimersNow();
   P.rage = false;
-  setFace(total > 0 ? 'relief' : 'normal');
-  P.char.setAnim(total > 0 ? 'cheer' : 'idle');
-  G.lastBill = { mode: G.mode, items: items.length, people: people.map((it) => ({ name: it.name, count: it.count, amount: it.amount })), total, isBest, relief, rank: rank[1], score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null, fight: fight.state() };
+  const sad = !!(lv && lv.fail);
+  setFace(sad ? 'endure' : total > 0 ? 'relief' : 'normal');
+  P.char.setAnim(sad ? 'idle' : total > 0 ? 'cheer' : 'idle');
+  G.lastBill = { mode: G.mode, items: items.length, people: people.map((it) => ({ name: it.name, count: it.count, amount: it.amount })), total, isBest, relief, rank: title, score, playT: +(G.playT || 0).toFixed(1), storySec: G.mode === 'story' ? +(G.rtime - (G.storyT0 || 0)).toFixed(1) : null, fight: fight.state(), level: lv, diff: DD().id || 'normal', beaten: G.beaten || 0, failed: G.failed || null };
 }
 function runTimersNow() { /* timers run on the next ticks; nothing to force */ }
 function endRampage() {
@@ -2093,7 +2270,7 @@ function ride(ev, dest) {
       enterFloor(dest, { elevator: idx });
       P.controls = true;
       if (G.rampage) {
-        ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: FLOOR_INFO[G.floorKind].name, tone: 'rage' });
+        ui.mission({ title: rampTitle(), sub: FLOOR_INFO[G.floorKind].name, tone: 'rage' });
         initTasks(G.floorKind);
       }
     }, 700);
@@ -2129,7 +2306,7 @@ function doorRide(pt) {
     enterFloor(pt.to, { door: from });
     P.controls = true;
     if (G.rampage) {
-      ui.mission({ title: G.mode === 'free' ? '자유 난동' : '1분 난동', sub: FLOOR_INFO[G.floorKind].name, tone: 'rage' });
+      ui.mission({ title: rampTitle(), sub: FLOOR_INFO[G.floorKind].name, tone: 'rage' });
       initTasks(G.floorKind);
     }
   }, 450));
@@ -2476,7 +2653,8 @@ function tick(dt) {
     if (G.special < 1) { G.special = Math.min(1, G.special + gdt / 45); ui.special(G.special); if (G.special >= 1 && !G.specialReadyShown) { G.specialReadyShown = true; sfx('specialReady', { vol: 0.8 }); ui.toast(TOUCH ? '필살기 준비 완료!' : 'Q 필살기 준비 완료!', 1600); } }
     if (G.comboT > 0) { G.comboT -= gdt; if (G.comboT <= 0) { G.combo = 0; ui.combo(0); } }
     checkTasks();
-    if (G.timeLeft != null && !G.busy) {
+    watchKo();
+    if (G.rampage && G.timeLeft != null && !G.busy) {
       G.timeLeft -= gdt;
       ui.timer(Math.max(0, G.timeLeft));
       const sec = Math.ceil(G.timeLeft);
@@ -2565,22 +2743,36 @@ function start(mode, opts = {}) {
   ui.subtitle(null, null); ui.vignette(0); ui.banner(null);
   resetDamage(); G.rampage = false; G.canDamage = false; G.timeLeft = null; G.stress = 0; G.queue = []; G.stressLog = [];
   G.homeWalk = null; G.outWrecks = []; // (things thrown out upstairs this run → wrecks on the street plaza)
+  G.failed = null; G.beaten = 0; G.kos = 0; G.kos0 = 0; G.downEdges = 0; G.wasDown = false; G.runId = (G.runId || 0) + 1;
+  // 본게임 = 레벨 (opts.level, 기본 1). opts.len ('long' | 'short') 은 하루 전체를 도는 시험 · 디버그 전용
+  G.level = mode === 'story' && !G.opts.len ? clamp(G.opts.level | 0 || 1, 1, LEVEL_N) : 0;
+  if (G.level) G.opts.level = G.level;
   if (G.opts.gender && G.opts.gender !== (P.char.group.name.endsWith('F') ? 'f' : 'm')) setPlayerChar(G.opts.gender);
   // fresh floors (reuse the title office if nobody touched it)
   const keep = G.floors.office && !G.floors.office.used && Object.keys(G.floors).length === 1 && mode === 'story';
   if (!keep) disposeFloors();
-  else { scene.remove(G.S.F.group); G.S = null; G.floors.office.used = true; }
+  else { scene.remove(G.S.F.group); G.S = null; G.floors.office.used = true; applyRunFight(G.floors.office); }
   fx.clear();
   Q.done = DEBUG; Q.samples.length = 0; Q.stable = 0;
+  if (mode === 'story' && G.level) {
+    const id = levelOf(G.level).scene;
+    STORY_ORDER = [id, 'rampage', 'bill']; G.storyT0 = G.rtime; G.scene = id;
+    return gotoScene(id);
+  }
   if (mode === 'story') { STORY_ORDER = G.opts.len === 'long' ? STORY_LONG : STORY_SHORT; G.storyT0 = G.rtime; G.scene = 'copier'; return gotoScene('copier'); }
-  if (mode === 'rush') {
-    return transition({ time: '오후 3:00', title: '1분 난동', sub: '참지 말고, 다 뒤집어엎자' }, () => {
+  if (mode === 'rush' || mode === 'boss') {
+    const boss = mode === 'boss';
+    const S0 = getFloor('office');
+    const card = boss
+      ? { time: '오후 3:00', title: '1분 보스전', sub: `${fight.bossName(S0)} · ${fight.midName(S0)}${eul(fight.midName(S0))} 쓰러뜨려라`, lv: `1분 난동 · 보스전 · ${diffName()}`, goal: `보스 격파 +${fmt(BOSS_BONUS.boss * moneyMul())}원 · 중간보스 격파 +${fmt(BOSS_BONUS.mid * moneyMul())}원` }
+      : { time: '오후 3:00', title: '1분 난동', sub: '참지 말고, 다 뒤집어엎자', lv: `1분 난동 · 일반 · ${diffName()}` };
+    return transition(card, () => {
       G.preset = 'day';
-      const S = enterFloor('office', { at: getFloor('office').F.anchors.rushSpawn, yaw: -PI / 2 });
+      const S = enterFloor('office', { at: S0.F.anchors.rushSpawn, yaw: -PI / 2 });
       resetPlayer(); snapCamera();
       startRampage();
       void S;
-    });
+    }, boss ? 2600 : 2100);
   }
   if (mode === 'free') {
     const fl = FLOOR_BY_ID[G.opts.floor] ? G.opts.floor : 'office';
@@ -2612,9 +2804,18 @@ function toTitle() {
   setStress(0, false);
   for (const ev of S.F.elevators) { ev.open = 0; ev.prop.set(0); }
   audio.music('title');
-  ui.title(true, { best: save.best.rush || 0, days: save.days });
+  G.level = 0;
+  ui.title(true, titleData());
   CAM.drift = 0;
   updateCamera(0, true);
+}
+// 첫 화면 · 레벨 선택에 보여 줄 것: 기록, 별, 난이도
+function titleData() {
+  return {
+    best: save.best.rush || 0, bestBoss: save.best.boss || 0, days: save.days,
+    stars: starsTotal(), starsMax: LEVEL_N * 3, next: nextLevel(), levelN: LEVEL_N, levels: levelRows(),
+    diffs: DIFF.DIFFS || [], diff: (DIFF.getDiff && DIFF.getDiff()) || 'normal',
+  };
 }
 function togglePause(on) {
   if (G.mode === 'title' || G.scene === 'bill') return;
@@ -2622,7 +2823,7 @@ function togglePause(on) {
   G.paused = on;
   if (on) {
     releaseLock();
-    ui.pause(true, { canSkip: G.mode === 'story' && !!STORY[G.scene] });
+    ui.pause(true, { canSkip: G.mode === 'story' && !!STORY[G.scene] && G.phase !== 'boil', level: G.mode === 'story' ? G.level : 0 });
     audio.suspend();
     clearInput();
   } else { ui.pause(false); audio.resume(); last = performance.now(); }
@@ -2831,7 +3032,11 @@ toys = createToys({
   destroyHeld() { const r = P.held; if (!r) return; P.held = null; if (r.group.parent) r.group.parent.remove(r.group); r.removed = true; r.destroyed = true; addItem(r.name, r.price); addMoney(Math.max(0, r.price - r.paid), null, true); emit('break', r); },
 });
 fight = createFight({
-  G, P, fx, sfx, ui, report, vibrate, isCalm, shake, hitStop, camKick, setFace, addMoney, bumpCombo, count, keepIn, npcCtx,
+  G, P, fx, sfx, ui, report, vibrate, isCalm, shake, hitStop, camKick, setFace, bumpCombo, count, keepIn, npcCtx,
+  // (딱! 보너스는 fight.js 가 난이도 배수를 이미 곱해서 준다 → raw)
+  addMoney: (amt, pos, quiet, charge, label) => addMoney(amt, pos, quiet, charge, label, true),
+  // 어려움: 쓰러지면 이 판 실패 (레벨 · 보스전). 다른 모드는 fight.js 가 잠시 뒤 일으켜 세운다
+  onPlayerKo() { if (G.rampage) watchKo(); },
   breakCombo() { G.combo = 0; G.comboT = 0; ui.combo(0); },
   // a blow lands: get off the chair / cart, put the carried coworker down (held props stay in hand)
   onPlayerHit() { if (toys.riding()) toys.dismount(); if (P.carryNpc) releaseNpc(false); P.attackT = Math.max(P.attackT, 0.25); },
@@ -2871,6 +3076,14 @@ const GAME = {
   triggerAlarm: (rec) => toys.triggerAlarm(rec || null),
 };
 
+// 그만두기: 레벨은 '조퇴 처리'(별 없음, 기록 안 남김), 나머지는 지금까지로 청구서
+function quitRun() {
+  togglePause(false);
+  if (G.mode === 'story' && G.level && !G.failed) G.failed = 'quit';
+  G.rampage = false;
+  showBill();
+}
+
 // ================================================================ handlers + boot
 ui.init({
   start(mode, opts) { start(mode, opts); },
@@ -2878,11 +3091,16 @@ ui.init({
   resume() { togglePause(false); },
   skipTask() {
     togglePause(false);
-    if (G.mode === 'story' && STORY[G.scene]) { G.gen++; G.transN++; G.timers.length = 0; G.busy = false; P.controls = true; STORY[G.scene].skip(); }
+    if (G.mode === 'story' && STORY[G.scene] && G.phase !== 'boil') { G.gen++; G.transN++; G.timers.length = 0; G.busy = false; P.controls = true; STORY[G.scene].skip(); }
   },
-  quit() { togglePause(false); if (G.rampage) { G.rampage = false; } showBill(); },
+  quit() { quitRun(); },
   toTitle() { toTitle(); },
   retry() { ui.bill(null); start(G.mode, G.opts); },
+  // 레벨: 다음 레벨 / 레벨 선택 창 / 고른 레벨 시작 / 난이도
+  next() { const n = (G.level || 0) + 1; ui.bill(null); if (n <= LEVEL_N && levelOpen(n)) start('story', Object.assign({}, G.opts, { level: n })); else { toTitle(); ui.levels(true, titleData()); } },
+  levels() { if (G.mode !== 'title') toTitle(); ui.levels(true, titleData()); },
+  level(n) { n = n | 0; if (n >= 1 && n <= LEVEL_N && levelOpen(n)) { ui.levels(false); start('story', { level: n, gender: ui.settings.gender }); } },
+  diff(id) { if (DIFF.setDiff) DIFF.setDiff(id); if (G.mode === 'title') { ui.title(true, titleData()); ui.levelsRefresh(titleData()); } },
   elevator(id) { onElevator(id); },
   action(name, down) { onAction(name, down); },
   setting(key, val) {
@@ -3012,7 +3230,8 @@ if (DEBUG) {
     start(mode, opts) { G.fast = true; return start(mode, opts || {}); },
     goto(id) {
       G.fast = true;
-      if (G.mode !== 'story') { G.mode = 'story'; ui.title(false); disposeFloors(); resetDamage(); }
+      if (G.mode !== 'story') { G.mode = 'story'; G.level = 0; ui.title(false); disposeFloors(); resetDamage(); }
+      if (G.level && STORY[id] && levelOf(G.level).scene !== id) G.level = 0; // (다른 상황으로 뛰면 하루 모드로)
       ui.bill(null);
       if (id === 'rampage') {
         G.gen++; G.transN++; G.timers.length = 0;
@@ -3036,7 +3255,24 @@ if (DEBUG) {
     yaw(a) { CAM.yaw = a; P.yaw = a; updateCamera(0, true); },
     look(yaw, pitch) { CAM.yaw = yaw; if (pitch != null) CAM.pitch = pitch; CAM.lastLook = G.rtime + 1e6; updateCamera(0, true); renderNow(); },
     ride(dest) { _bot.forceDest = dest; return dest; },
-    quit() { togglePause(false); G.rampage = false; showBill(); return true; },
+    quit() { quitRun(); return true; },
+    // ---- 레벨 · 난이도 (tests)
+    level(n = 1) { G.fast = true; return start('story', { level: n }); },
+    levels: () => ({ rows: levelRows(), stars: starsTotal(), next: nextLevel(), save: JSON.parse(JSON.stringify(save)) }),
+    levelSelect(show = true) { if (show && G.mode !== 'title') toTitle(); ui.levels(!!show, titleData()); return !!show; },
+    unlock(n = LEVEL_N) { for (let i = 1; i < n; i++) if (!lvSave(i).clear) save.lv[i] = { stars: lvSave(i).stars, best: lvSave(i).best, clear: true }; writeSave(); return levelRows().filter((r) => r.open).length; },
+    resetLevels() { save.lv = {}; writeSave(); return true; },
+    // 지금 상황 건너뛰기 (레벨: 바로 끓어올라 난동으로)
+    skip() { if (G.mode === 'story' && STORY[G.scene] && G.phase !== 'boil') { G.gen++; G.transN++; G.timers.length = 0; G.busy = false; P.controls = true; STORY[G.scene].skip(); return true; } return false; },
+    diff(id) { if (id && DIFF.setDiff) DIFF.setDiff(id); return Object.assign({ id: DIFF.getDiff ? DIFF.getDiff() : 'normal' }, DD()); },
+    koRule: () => koRule(),
+    // npc q 를 주인공이 때린 것처럼 (mental 을 주면 먼저 그만큼으로: 보스 격파 시험)
+    hitNpc(q, kind = 'punch', mental = null) {
+      const n = __ppg._n(q); if (!n) return null;
+      if (mental != null) n.mental = mental;
+      const d = V(n.pos.x - P.pos.x, 0, n.pos.z - P.pos.z); if (d.lengthSq() < 1e-4) d.set(0, 0, 1); d.normalize();
+      hitPerson(n, d, kind, {}); return __ppg.npc(G.S.npcs.indexOf(n));
+    },
     pause(on = true) { togglePause(!!on); return G.paused; },
     render() { renderNow(); return info(); },
     info,

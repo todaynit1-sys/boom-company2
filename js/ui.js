@@ -9,7 +9,8 @@ const now = () => performance.now();
 
 /* ---------- 설정 ---------- */
 const SKEY = 'ppg.settings';
-const settings = { sfx: true, bgm: true, vibe: true, calm: false, gender: 'm', storyLen: 'short' };
+// (예전 저장의 storyLen '짧게·길게'는 이제 안 쓴다: 모르는 칸은 읽지 않고, 다음 저장 때 빠진다)
+const settings = { sfx: true, bgm: true, vibe: true, calm: false, gender: 'm' };
 try {
   const saved = JSON.parse(localStorage.getItem(SKEY) || 'null');
   if (saved && typeof saved === 'object') {
@@ -17,7 +18,6 @@ try {
   }
 } catch (e) { /* 저장소를 못 쓰면 기본값 */ }
 if (settings.gender !== 'f') settings.gender = 'm';
-if (settings.storyLen !== 'long') settings.storyLen = 'short';
 function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) { /* 무시 */ } }
 
 /* ---------- 이름 정하기 (보스 · 중간보스 · 내 이름) ----------
@@ -96,7 +96,8 @@ function grab() {
     't-best', 't-gender', 't-help', 'pause', 'p-resume', 'p-skip', 'p-quit', 'p-title', 'p-keys', 'bill', 'r-co', 'r-meta',
     'r-items', 'r-total', 'r-best', 'r-relief', 'r-relief-bar', 'r-rank', 'r-comment', 'b-retry', 'b-share', 'b-title',
     'fade', 'f-time', 'f-title', 'f-sub', 'boot', 'hearts', 'names', 'n-boss', 'n-mid', 'n-me', 'n-save', 'n-reset', 'n-link',
-    'n-close', 'n-note', 't-names', 't-names-sub']) E[id] = $(id);
+    'n-close', 'n-note', 't-names', 't-names-sub', 't-diff', 't-story', 't-lv-sub', 't-best-boss', 'f-lv', 'f-goal', 'levels', 'lv-grid',
+    'lv-diff', 'lv-stars', 'lv-close', 'r-h', 'r-stars', 'b-next', 'b-levels']) E[id] = $(id);
   E.stressIn = E.stress && E.stress.querySelector('.s-in b');
   E.promptKey = E.prompt && E.prompt.querySelector('.kc b');
   E.promptText = E.prompt && E.prompt.querySelector('.pt');
@@ -290,9 +291,71 @@ function moveJoy(x, y) {
 function syncTitleOpts() {
   for (const b of E['t-gender'].querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.g === settings.gender));
   for (const b of E.title.querySelectorAll('.tg')) b.setAttribute('aria-pressed', String(!!settings[b.dataset.set]));
-  for (const b of E.title.querySelectorAll('[data-len]')) b.setAttribute('aria-pressed', String(b.dataset.len === settings.storyLen));
-  const sub = document.getElementById('t-len-sub');
-  if (sub) sub.textContent = settings.storyLen === 'long' ? '하루 이야기 · 상황 8개 · 약 9분' : '하루 이야기 · 상황 3개 · 약 4분';
+}
+
+/* ---------- 난이도 칩 (첫 화면 · 레벨 선택 창에 같은 모양) ----------
+   목록과 지금 값은 main.js 가 diff.js 에서 읽어 넘긴다 (ui 는 다른 모듈을 가져오지 않는다) */
+const FALLBACK_DIFFS = [{ id: 'easy', n: '쉬움', sub: '' }, { id: 'normal', n: '보통', sub: '' }, { id: 'hard', n: '어려움', sub: '' }];
+let diffList = FALLBACK_DIFFS, diffCur = 'normal';
+function drawDiffs(el) {
+  if (!el) return;
+  if (el.childElementCount !== diffList.length || el.dataset.ids !== diffList.map((d) => d.id).join()) {
+    el.textContent = '';
+    for (const d of diffList) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.dataset.diff = d.id; b.setAttribute('role', 'radio'); b.className = 'dchip d-' + d.id; if (d.sub) b.title = d.sub;
+      const n = document.createElement('b'); n.textContent = d.n || d.id;
+      const s = document.createElement('small'); s.textContent = d.sub || '';
+      b.append(n, s); el.appendChild(b);
+    }
+    el.dataset.ids = diffList.map((d) => d.id).join();
+  }
+  for (const b of el.children) { const on = b.dataset.diff === diffCur; b.setAttribute('aria-checked', String(on)); b.setAttribute('aria-pressed', String(on)); }
+}
+function setDiffData(d) {
+  if (d && Array.isArray(d.diffs) && d.diffs.length) diffList = d.diffs;
+  if (d && d.diff) diffCur = d.diff;
+  drawDiffs(E['t-diff']); drawDiffs(E['lv-diff']);
+}
+
+/* ---------- 레벨 선택 창 ---------- */
+const STAR_ON = '★', STAR_OFF = '☆';
+const starText = (n) => STAR_ON.repeat(clamp(n | 0, 0, 3)) + STAR_OFF.repeat(3 - clamp(n | 0, 0, 3));
+function drawLevels(d) {
+  const grid = E['lv-grid']; if (!grid || !d) return;
+  setDiffData(d);
+  if (E['lv-stars']) E['lv-stars'].textContent = `★ ${d.stars || 0} / ${d.starsMax || 0}`;
+  grid.textContent = '';
+  for (const r of d.levels || []) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'lv-card' + (r.open ? '' : ' locked') + (r.clear ? ' clear' : '') + (r.n === d.next && r.open ? ' next' : '') + (r.boss ? ' boss' : r.mid ? ' mid' : '');
+    b.dataset.lv = String(r.n);
+    if (!r.open) { b.setAttribute('aria-disabled', 'true'); b.title = '앞 레벨을 깨면 열려요'; }
+    // [번호] 제목 / 층 · 시각 / ★★☆ 최고(또는 목표) — 잠긴 판은 자물쇠 + 안내
+    const num = document.createElement('span'); num.className = 'lv-n'; num.textContent = r.n;
+    const tx = document.createElement('span'); tx.className = 'lv-tx';
+    const t = document.createElement('b'); t.textContent = r.title;
+    const s = document.createElement('small'); s.textContent = `${r.fl} · ${r.time}`;
+    const st = document.createElement('span'); st.className = 'lv-st';
+    if (r.open) {
+      const stars = document.createElement('i'); stars.className = 'stars'; stars.textContent = starText(r.stars); stars.setAttribute('aria-label', `별 ${r.stars}개`);
+      const best = document.createElement('em'); best.textContent = r.best > 0 ? `최고 ${fmt(r.best)}원` : `목표 ${fmt(r.goal)}원`;
+      st.append(stars, best);
+    } else { const lk = document.createElement('i'); lk.className = 'lock'; lk.setAttribute('aria-label', '잠김'); const em = document.createElement('em'); em.textContent = '앞 레벨을 깨면 열려요'; st.append(lk, em); }
+    tx.append(t, s, st);
+    b.append(num, tx);
+    if (r.tag) { const tg = document.createElement('span'); tg.className = 'lv-tag'; tg.textContent = r.tag; b.appendChild(tg); }
+    grid.appendChild(b);
+  }
+}
+function openLevels(show, d) {
+  const el = E.levels; if (!el) return;
+  if (!show) { el.hidden = true; return; }
+  drawLevels(d);
+  el.hidden = false;
+  const sc = el.querySelector('.lv-scroll'); if (sc) sc.scrollTop = 0;
+  const nx = el.querySelector('.lv-card.next');
+  if (nx && nx.scrollIntoView) { try { nx.scrollIntoView({ block: 'nearest' }); } catch (e) { /* 무시 */ } }
 }
 function helpHTML() {
   if (isTouch) return '왼쪽 아래를 끌어 걷고, 오른쪽 화면을 끌어 둘러봐요. 오른쪽 버튼으로 때리고 집고 뛰어요.';
@@ -320,13 +383,14 @@ function readNameFields() {
 }
 
 /* ---------- 청구서 ---------- */
-const MODE_LABEL = { story: '하루 이야기', rush: '1분 난동', free: '자유 난동' };
+const MODE_LABEL = { story: '본게임', rush: '1분 난동 · 일반', boss: '1분 난동 · 보스전', free: '자유 난동' };
+const modeLabel = (d) => (d.mode === 'story' && d.level ? `레벨 ${d.level.n} · ${d.level.title}` : MODE_LABEL[d.mode] || '난동');
 let lastBill = null;
 async function shareBill() {
   const d = lastBill || {};
-  const mode = MODE_LABEL[d.mode] || '회사 뿌개기';
+  const mode = d.mode === 'story' && d.level ? `레벨 ${d.level.n} ${starText(d.level.stars)}` : MODE_LABEL[d.mode] || '회사 뿌개기';
   const url = location.origin + location.pathname.replace(/tools\/[^/]*$/, '');
-  const text = `회사 뿌개기 ${mode} 피해 청구서: ${fmt(d.total)}원` +
+  const text = `회사 뿌개기 ${mode} 피해 청구서: ${fmt(d.total)}원` + (d.diff ? ` · ${d.diff}` : '') +
     (d.title ? ` · 칭호 「${d.title}」` : '') +
     (d.relief != null ? ` · 스트레스 ${Math.round(d.relief)}% 해소` : '');
   if (navigator.share) {
@@ -353,9 +417,27 @@ function bindUI() {
   bound = true;
   const on = (el, fn) => el && el.addEventListener('click', (e) => { fn(e); blurActive(); });
   on(E['btn-pause'], () => call('pause'));
-  for (const b of E.title.querySelectorAll('[data-mode]')) on(b, () => call('start', b.dataset.mode, { floor: 'office', gender: settings.gender, len: settings.storyLen }));
-  for (const b of E.title.querySelectorAll('[data-len]')) on(b, () => { settings.storyLen = b.dataset.len === 'long' ? 'long' : 'short'; saveSettings(); syncTitleOpts(); });
+  for (const b of E.title.querySelectorAll('[data-mode]')) on(b, () => call('start', b.dataset.mode, { floor: 'office', gender: settings.gender }));
+  // 출근하기 → 레벨 선택 창
+  on(E['t-story'], () => call('levels'));
   for (const b of E.title.querySelectorAll('[data-free]')) on(b, () => call('start', 'free', { floor: b.dataset.free, gender: settings.gender }));
+  // 난이도 칩 (첫 화면 · 레벨 선택 창): 누르면 바로 저장 (main → diff.js setDiff)
+  for (const el of [E['t-diff'], E['lv-diff']]) if (el) el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-diff]'); if (!b) return;
+    blurActive(); diffCur = b.dataset.diff; drawDiffs(E['t-diff']); drawDiffs(E['lv-diff']);
+    call('diff', b.dataset.diff);
+  });
+  if (E['lv-grid']) E['lv-grid'].addEventListener('click', (e) => {
+    const b = e.target.closest('.lv-card'); if (!b) return;
+    blurActive();
+    if (b.classList.contains('locked')) { ui.toast('앞 레벨을 깨면 열려요', 1500); anim(b, [{ transform: 'translateX(-5px)' }, { transform: 'translateX(5px)' }, { transform: 'translateX(0)' }], { duration: 220 }); return; }
+    call('level', +b.dataset.lv);
+  });
+  on(E['lv-close'], () => openLevels(false));
+  if (E.levels) E.levels.addEventListener('pointerdown', (e) => { if (e.target === E.levels) openLevels(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && E.levels && !E.levels.hidden) { e.preventDefault(); openLevels(false); } });
+  on(E['b-next'], () => call('next'));
+  on(E['b-levels'], () => call('levels'));
   for (const b of E['t-gender'].querySelectorAll('button')) on(b, () => {
     settings.gender = b.dataset.g; saveSettings(); syncTitleOpts(); call('setting', 'gender', settings.gender);
   });
@@ -460,16 +542,28 @@ export const ui = {
     return ui;
   },
 
-  title(show, { best = null, days = 0 } = {}) {
+  title(show, d = {}) {
     E.title.hidden = !show;
-    if (!show) { openNames(false); return; }
+    if (!show) { openNames(false); openLevels(false); return; }
     syncTitleOpts();
     syncNames();
+    setDiffData(d);
     E['t-help'].innerHTML = helpHTML();
-    E['t-best'].textContent = best != null && best > 0 ? `최고 기록 ${fmt(best)}원` : '최고 기록 없음 · 첫 기록을 남겨 보세요';
+    const best = Number(d.best) || 0, bestBoss = Number(d.bestBoss) || 0;
+    // (버튼이 좁아 백만 원부터는 '만원' 단위로)
+    const won = (n) => (n >= 1e6 ? `${fmt(Math.floor(n / 1e4))}만원` : `${fmt(n)}원`);
+    E['t-best'].textContent = best > 0 ? `최고 ${won(best)}` : '기록 없음';
+    if (E['t-best-boss']) E['t-best-boss'].textContent = bestBoss > 0 ? `최고 ${won(bestBoss)}` : '기록 없음';
+    const N = d.levelN || 8, nx = d.next || 1;
+    if (E['t-lv-sub']) E['t-lv-sub'].textContent = d.stars > 0 ? `레벨 1~${N} · 다음 레벨 ${nx}` : `레벨 1~${N} · 하루를 레벨로`;
     const dd = E['t-days'];
-    if (days > 0) { dd.textContent = `퇴근 성공 ${days}일`; dd.hidden = false; } else dd.hidden = true;
+    if (d.stars > 0) { dd.textContent = `★ ${d.stars}/${d.starsMax || N * 3}`; dd.hidden = false; } else dd.hidden = true;
+    if (E.levels && !E.levels.hidden) drawLevels(d);
   },
+  // 레벨 선택 창: { levels: [{ n, title, time, fl, tag, goal, open, stars, best, clear }], stars, starsMax, next, diffs, diff }
+  levels(show, d) { openLevels(show, d); },
+  levelsRefresh(d) { setDiffData(d); if (E.levels && !E.levels.hidden) drawLevels(d); },
+  get levelsOpen() { return !!(E.levels && !E.levels.hidden); },
 
   hud(show) {
     E.hud.hidden = !show;
@@ -743,9 +837,11 @@ export const ui = {
     const el = E.fade;
     el.classList.toggle('blank', !info);
     if (info) {
+      if (E['f-lv']) E['f-lv'].textContent = info.lv || ''; // "레벨 3 · 7층 · 보통"
       E['f-time'].textContent = info.time || '';
       E['f-title'].textContent = info.title || '';
       E['f-sub'].textContent = info.sub || '';
+      if (E['f-goal']) E['f-goal'].textContent = info.goal || ''; // "★ 목표 피해액 … · 중간보스가 덤벼요"
     }
     const wasHidden = el.hidden;
     el.hidden = false;
@@ -811,10 +907,12 @@ export const ui = {
     el.hidden = false;
   },
 
-  pause(show, { canSkip } = {}) {
+  pause(show, { canSkip, level = 0 } = {}) {
     E.pause.hidden = !show;
     if (!show) return;
     E['p-skip'].hidden = !canSkip;
+    E['p-skip'].textContent = level ? '이 상황 건너뛰고 난동으로' : '할 일 하나 건너뛰기';
+    E['p-quit'].textContent = level ? '그만두기 (조퇴 · 별 없음)' : '그만두고 청구서 받기';
     const ul = E['p-keys'];
     ul.textContent = '';
     for (const [k, t] of isTouch ? PAUSE_KEYS_TOUCH : PAUSE_KEYS_DESK) {
@@ -834,7 +932,38 @@ export const ui = {
     E['r-co'].textContent = data.company || '(주)가족같은회사';
     const d = new Date();
     const p2 = (n) => String(n).padStart(2, '0');
-    E['r-meta'].textContent = `${MODE_LABEL[data.mode] || '난동'} · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}` + (data.meta ? ` · ${data.meta}` : '') + (data.who ? ` · 청구 대상 ${data.who}` : '');
+    const L = data.mode === 'story' && data.level ? data.level : null;
+    el.classList.toggle('lv', !!L);
+    el.classList.toggle('fail', !!(L && L.fail));
+    if (E['r-h']) E['r-h'].textContent = L && L.fail === 'ko' ? '퇴사 처리 통지서' : L && L.fail === 'quit' ? '조퇴 처리 통지서' : '피해 청구서';
+    E['r-meta'].textContent = `${modeLabel(data)}` + (data.diff ? ` · ${data.diff}` : '') + ` · ${d.getFullYear()}.${p2(d.getMonth() + 1)}.${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}` + (data.meta ? ` · ${data.meta}` : '') + (data.who ? ` · 청구 대상 ${data.who}` : '');
+    // 레벨 별: ★ 클리어 · ★ 목표 피해액 · ★ 안 쓰러짐
+    const rs = E['r-stars'];
+    if (rs) {
+      rs.textContent = '';
+      rs.hidden = !L;
+      if (L) {
+        const why = ['끝까지 버티기', `목표 ${fmt(L.goal)}원`, '한 번도 안 쓰러지기'];
+        for (let i = 0; i < 3; i++) {
+          const on = !!(L.got && L.got[i]);
+          const s = document.createElement('span'); s.className = 'rs' + (on ? ' on' : '');
+          s.style.setProperty('--d', (0.7 + i * 0.22) + 's');
+          const ic = document.createElement('i'); ic.textContent = on ? STAR_ON : STAR_OFF; ic.setAttribute('aria-hidden', 'true');
+          const t = document.createElement('small'); t.textContent = why[i];
+          s.append(ic, t); rs.appendChild(s);
+        }
+        rs.setAttribute('aria-label', `별 ${L.stars}개`);
+      }
+    }
+    // 버튼: 레벨이면 [다음 레벨 | 다시 도전] · 다시 하기 · 레벨 선택 · 자랑하기, 아니면 다시 하기 · 자랑하기 · 처음으로
+    const next = !!(L && !L.fail && L.hasNext && L.nextOpen);
+    el.classList.toggle('next', next);
+    if (E['b-next']) { E['b-next'].hidden = !next; E['b-next'].textContent = L && L.unlocked ? `레벨 ${L.n + 1} 열림! 다음 레벨` : '다음 레벨'; }
+    if (E['b-levels']) E['b-levels'].hidden = !L;
+    E['b-retry'].textContent = L ? (L.fail ? '다시 도전' : '다시 하기') : '다시 하기';
+    E['b-retry'].classList.toggle('primary', !next);
+    E['b-share'].hidden = !!(L && L.fail);
+    E['b-title'].hidden = !!L;
     const tb = E['r-items'];
     tb.textContent = '';
     const items = data.items || [], people = data.people || [];
@@ -861,10 +990,11 @@ export const ui = {
     E['r-total'].textContent = fmt(data.total) + '원';
     const best = E['r-best'];
     best.textContent = '';
+    const bl = L ? `레벨 ${L.n} ` : data.mode === 'boss' ? '보스전 ' : data.mode === 'rush' ? '일반 ' : '';
     if (data.isBest) {
       const nb = document.createElement('span'); nb.className = 'nb'; nb.textContent = '신기록';
-      best.append(nb, document.createTextNode(data.best > 0 && data.best !== data.total ? `이전 최고 ${fmt(data.best)}원` : '최고 기록 갱신'));
-    } else if (data.best > 0) best.textContent = `최고 기록 ${fmt(data.best)}원`;
+      best.append(nb, document.createTextNode(data.best > 0 && data.best !== data.total ? `${bl}이전 최고 ${fmt(data.best)}원` : `${bl}최고 기록 갱신`));
+    } else if (data.best > 0) best.textContent = `${bl}최고 기록 ${fmt(data.best)}원`;
     best.hidden = !best.textContent;
     const r = clamp(Math.round(Number(data.relief) || 0), 0, 100);
     E['r-relief'].textContent = r + '%';

@@ -201,7 +201,8 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     f = await fst();
     expect(again === "none" && f.hearts === 3, `a second blow during invulnerability does nothing (${again}, hearts ${f.hearts})`);
     expect((await ev('__ppg.sfxLog()')).some((e) => e.n === 'hurt'), 'hurt sfx');
-    expect(!(await ev('document.getElementById("hearts").hidden')) && (await ev('document.querySelectorAll("#hearts i.on").length')) === 3, 'HUD shows 3 hearts');
+    // (하트 줄 대신 체력 게이지 #hpbar — hpbar.js)
+    expect(!(await ev('document.getElementById("hpbar").hidden')) && /\d/.test(await ev('document.querySelector("#hpbar .hpb-num").textContent')), 'HUD shows the HP gauge');
     await step(70);
     f = await fst();
     expect(f.invuln === 0, 'invulnerability ends after ~1 s');
@@ -404,19 +405,19 @@ export default async ({ ev, shot, log, sleep, send, step, W, H }) => {
     const ov = await ev(`(() => {
       const R = (e) => e.getBoundingClientRect();
       const pads = [...document.querySelectorAll('#tbtns .tbtn'), document.getElementById('joy-base')].map(e => [e.className || e.id, R(e)]);
-      const hud = ['#mission', '#tasks', '#stress', '#hearts', '#timer', '#money', '#btn-pause', '#combo'].map(s => document.querySelector(s)).filter(e => e && !e.hidden && e.getBoundingClientRect().width).map(e => [e.id, R(e)]);
+      const hud = ['#mission', '#tasks', '#stress', '#hpbar', '#timer', '#money', '#btn-pause', '#combo'].map(s => document.querySelector(s)).filter(e => e && !e.hidden && e.getBoundingClientRect().width).map(e => [e.id, R(e)]);
       const hit = (p, h) => p.left < h.right && p.right > h.left && p.top < h.bottom && p.bottom > h.top;
       const hits = [];
       for (const [a, p] of pads) for (const [b, h] of hud) if (hit(p, h)) hits.push(a + '×' + b);
       for (let i = 0; i < pads.length; i++) for (let j = i + 1; j < pads.length; j++) if (hit(pads[i][1], pads[j][1])) hits.push(pads[i][0] + '×' + pads[j][0]);
       const off = pads.filter(([a, p]) => p.left < 0 || p.top < 0 || p.right > innerWidth || p.bottom > innerHeight).map(([a]) => a);
-      const hh = [...hud].filter(([a]) => a === 'hearts').map(([a, h]) => h)[0];
+      const hh = [...hud].filter(([a]) => a === 'hpbar').map(([a, h]) => h)[0];
       const hudHits = [];
       for (const [a, p] of hud) for (const [b, h] of hud) if (a < b && hit(p, h)) hudHits.push(a + '×' + b);
       return { hits, off, hudHits, hearts: hh ? { l: hh.left, t: hh.top, w: hh.width, h: hh.height } : null };
     })()`);
     log('touch layout', JSON.stringify(ov));
-    expect(!ov.hits.length && !ov.off.length && !ov.hudHits.length && ov.hearts, '막기 button / hearts: no overlap, on screen ' + JSON.stringify(ov));
+    expect(!ov.hits.length && !ov.off.length && !ov.hudHits.length && ov.hearts, '막기 button / HP gauge: no overlap, on screen ' + JSON.stringify(ov));
     const gb = await I.rect('.t-guard');
     expect(gb && gb.w >= 40, '막기 button big enough ' + JSON.stringify(gb));
     await face(bi, 1.15);

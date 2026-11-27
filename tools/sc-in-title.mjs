@@ -48,10 +48,12 @@ export default async ({ ev, shot, log, sleep, send }) => {
   expect((await st()).paused, 'Esc pauses');
   await I.clickSel('#p-title');
   await I.waitFor('!document.getElementById("title").hidden', 8000);
-  // 출근하기
-  await I.clickSel('#title [data-mode="story"]');
+  // 출근하기 → 레벨 선택 → 레벨 1
+  await I.clickSel('#t-story');
+  await I.waitFor('!document.getElementById("levels").hidden', 5000);
+  await I.clickSel('#lv-grid .lv-card[data-lv="1"]');
   s = await I.waitFor('(() => { const s = __ppg.state(); return s.scene === "copier" && !s.busy ? s : null; })()', 20000);
-  expect(s.mode === 'story', '출근하기 starts the story ' + s.phase);
+  expect(s.mode === 'story', '출근하기 → 레벨 1 starts the story ' + s.phase);
   await sleep(600);
   await shot('ti-3-story');
   await I.tap('KeyP');
