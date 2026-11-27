@@ -76,7 +76,10 @@ addEventListener('unhandledrejection', (e) => report(e.reason));
 
 // ================================================================ renderer
 const canvas = document.getElementById('cv');
-const gfx = createGfx(canvas, { touch: TOUCH, debug: DEBUG });
+// 화질: 첫 화면의 [자동 · 빠르게 · 예쁘게] (ui.settings.gfx). 주소의 ?gfx=auto|fast|pretty 가 있으면 그것 (시험용, 저장 안 함).
+// #debug 이고 ?gfx= 가 없으면 예전처럼 가장 예쁜 단계에 고정 (시험이 기기마다 달라지지 않게)
+const GFX_Q = (location.search.match(/[?&]gfx=(auto|fast|pretty)\b/) || [])[1] || null;
+const gfx = createGfx(canvas, { touch: TOUCH, debug: DEBUG, mode: GFX_Q || ui.settings.gfx || 'auto', fixed: DEBUG && !GFX_Q });
 const { scene, camera } = gfx;
 const fx = createFx(scene);
 fx.camera = camera; // KO soul puffs turn to face it
@@ -345,6 +348,7 @@ function enterFloor(kind, { at = null, yaw = null, elevator = null, door = null 
     for (const n of [...G.S.npcs, ...G.S.walkers]) ui.bubble(n.id, null);
   }
   gfx.clearHighlight();
+  gfx.adaptReset(); // (새 층: 셰이더 컴파일 · 짓기로 끊기는 첫 프레임들은 화질 판단에서 뺀다)
   G.S = S; G.floorKind = kind;
   if (!S.F.group.parent) scene.add(S.F.group);
   if (P.char.group.parent !== S.F.group) S.F.group.add(P.char.group);
@@ -2706,9 +2710,8 @@ function renderNow() {
   try { frameUI(); gfx.render(G.manual || G.rampage || (G.S && G.S.phys.awake > 0) ? 1 : 2); } catch (e) { report(e); }
 }
 
-// ================================================================ loop + adaptive quality
+// ================================================================ loop + adaptive quality (gfx.adapt: 자동 화질)
 let last = performance.now(), acc = 0;
-const Q = { samples: [], t: 0, stable: 0, done: DEBUG };
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -2723,15 +2726,9 @@ function frame(now) {
   // fps + adaptive quality during play
   G.fpsAcc = (G.fpsAcc || 0) + dt; G.fpsN = (G.fpsN || 0) + 1;
   if (G.fpsAcc > 1) { G.fps = Math.round(G.fpsN / G.fpsAcc); G.fpsAcc = 0; G.fpsN = 0; }
-  if (!Q.done && !G.manual && !document.hidden && G.mode !== 'title' && !G.paused) {
-    Q.samples.push(dt);
-    if (Q.samples.length >= 90) {
-      const s = Q.samples.slice().sort((a, b) => a - b); const med = s[s.length >> 1];
-      Q.samples.length = 0;
-      if (med > 0.024 && gfx.level < 3) { gfx.setQuality(gfx.level + 1); Q.stable = 0; }
-      else if (++Q.stable >= 3) Q.done = true;
-    }
-  }
+  // (첫 화면에서도 잰다: 느린 기기는 메뉴를 고르는 동안 이미 알맞은 단계로 내려가 있다)
+  gfx.adapt((now - G.lastNow) / 1000 || 0, !G.manual && !document.hidden && !G.paused && G.lastNow > 0);
+  G.lastNow = now;
 }
 
 // ================================================================ modes
@@ -2753,7 +2750,7 @@ function start(mode, opts = {}) {
   if (!keep) disposeFloors();
   else { scene.remove(G.S.F.group); G.S = null; G.floors.office.used = true; applyRunFight(G.floors.office); }
   fx.clear();
-  Q.done = DEBUG; Q.samples.length = 0; Q.stable = 0;
+  gfx.adaptReset();
   if (mode === 'story' && G.level) {
     const id = levelOf(G.level).scene;
     STORY_ORDER = [id, 'rampage', 'bill']; G.storyT0 = G.rtime; G.scene = id;
@@ -3106,6 +3103,7 @@ ui.init({
   setting(key, val) {
     if (key === 'sfx' || key === 'bgm') audio.setEnabled({ [key]: !!val });
     else if (key === 'gender') setPlayerChar(val === 'f' ? 'f' : 'm');
+    else if (key === 'gfx') gfx.setMode(val);
   },
 });
 P.char = makePlayerChar(ui.settings.gender);
@@ -3277,5 +3275,7 @@ if (DEBUG) {
     render() { renderNow(); return info(); },
     info,
     quality(l) { gfx.setQuality(l); return gfx.level; },
+    // 화질 모드 ('auto' | 'fast' | 'pretty') · 자동 화질 상태
+    gfxMode(m) { if (m) gfx.setMode(m); return gfx.adaptState(); },
   };
 }

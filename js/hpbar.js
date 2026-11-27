@@ -67,7 +67,7 @@ const CSS = `
 
 let read = null, el = null, fillEl, lostEl, numEl, dmgEl, diffEl, raf = 0, lastT = 0, mountN = 0;
 // what is drawn (fractions 0..1)
-const V = { fill: 1, lost: 1, hold: 0, seq: -1, shown: false, cls: '', num: '', diff: '' };
+const V = { fill: 1, lost: 1, hold: 0, seq: -1, shown: false, cls: '', num: '', diff: '', wf: '', wl: '' };
 
 function build() {
   if (!document.getElementById('hpbar-css')) {
@@ -141,8 +141,10 @@ function draw(dt) {
   if (V.hold > 0) V.hold -= dt;
   else if (V.lost > V.fill) V.lost = Math.max(V.fill, V.lost - Math.max(0.35, (V.lost - V.fill) * 3.5) * dt);
   if (V.lost < V.fill) V.lost = V.fill;
-  fillEl.style.width = pct(V.fill);
-  lostEl.style.width = pct(V.lost);
+  // (바뀔 때만 쓴다: 같은 값을 매 프레임 써도 스타일 계산이 다시 돈다)
+  const wf = pct(V.fill), wl = pct(V.lost);
+  if (wf !== V.wf) { V.wf = wf; fillEl.style.width = wf; }
+  if (wl !== V.wl) { V.wl = wl; lostEl.style.width = wl; }
   const cls = (s.out ? 'out down ' : s.down ? 'down ' : '') + (f < 0.25 ? 'low' : f < 0.5 ? 'mid' : '');
   if (cls !== V.cls) {
     V.cls = cls;

@@ -373,6 +373,12 @@ button.mbtn:active { transform: scale(.98); }
 .tg::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, .3); }
 .tg[aria-pressed="true"] { background: rgba(34, 199, 154, .22); border-color: rgba(70, 230, 180, .7); color: #fff; }
 .tg[aria-pressed="true"]::before { background: #3ff0b8; box-shadow: 0 0 6px #3ff0b8; }
+/* 화질: 토글과 같은 알약 높이의 세 칸 고르기 */
+.gq { display: inline-flex; align-items: center; gap: 2px; min-height: 34px; box-sizing: border-box; padding: 2px; border-radius: 999px; background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .22); }
+.gq-lbl { padding: 0 5px 0 9px; font-size: 13.5px; font-weight: 700; color: rgba(255, 255, 255, .75); white-space: nowrap; }
+.gq button { min-height: 28px; padding: 0 9px; border-radius: 999px; font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, .78); white-space: nowrap; }
+.gq button:hover { background: rgba(255, 255, 255, .12); }
+.gq button[aria-checked="true"] { background: #fff; color: #1b1d26; }
 .t-help { margin: 0; font-size: 12.5px; line-height: 1.6; color: rgba(255, 255, 255, .7); }
 .t-help .hi { white-space: nowrap; }
 .ev-btn .fl.long { font-size: 15px; }
@@ -571,6 +577,8 @@ button.mbtn:active { transform: scale(.98); }
   .floors button i { display: none; }
   .t-opts { gap: 8px; }
   .tg { min-height: 32px; }
+  .gq { min-height: 32px; }
+  .gq button { min-height: 26px; }
   .t-help { grid-column: 2; font-size: 11.5px; }
   #title { background: linear-gradient(90deg, rgba(14, 16, 26, .88) 0, rgba(14, 16, 26, .6) 520px, rgba(14, 16, 26, 0) 640px); }
   .p-card { padding: 16px; }
@@ -629,3 +637,6 @@ button.mbtn:active { transform: scale(.98); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* 낮은 화질 단계 (느린 컴퓨터: gfx.js 가 html 에 .lowgfx): HUD 뒤 흐림은 3D 화면이 바뀔 때마다 다시 계산돼서 끈다 */
+.lowgfx * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }

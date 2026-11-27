@@ -10,7 +10,8 @@ const now = () => performance.now();
 /* ---------- 설정 ---------- */
 const SKEY = 'ppg.settings';
 // (예전 저장의 storyLen '짧게·길게'는 이제 안 쓴다: 모르는 칸은 읽지 않고, 다음 저장 때 빠진다)
-const settings = { sfx: true, bgm: true, vibe: true, calm: false, gender: 'm' };
+// gfx: 화질 'auto'(자동) · 'fast'(빠르게) · 'pretty'(예쁘게)
+const settings = { sfx: true, bgm: true, vibe: true, calm: false, gender: 'm', gfx: 'auto' };
 try {
   const saved = JSON.parse(localStorage.getItem(SKEY) || 'null');
   if (saved && typeof saved === 'object') {
@@ -18,6 +19,7 @@ try {
   }
 } catch (e) { /* 저장소를 못 쓰면 기본값 */ }
 if (settings.gender !== 'f') settings.gender = 'm';
+if (settings.gfx !== 'fast' && settings.gfx !== 'pretty') settings.gfx = 'auto';
 function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) { /* 무시 */ } }
 
 /* ---------- 이름 정하기 (보스 · 중간보스 · 내 이름) ----------
@@ -97,7 +99,7 @@ function grab() {
     'r-items', 'r-total', 'r-best', 'r-relief', 'r-relief-bar', 'r-rank', 'r-comment', 'b-retry', 'b-share', 'b-title',
     'fade', 'f-time', 'f-title', 'f-sub', 'boot', 'hearts', 'names', 'n-boss', 'n-mid', 'n-me', 'n-save', 'n-reset', 'n-link',
     'n-close', 'n-note', 't-names', 't-names-sub', 't-diff', 't-story', 't-lv-sub', 't-best-boss', 'f-lv', 'f-goal', 'levels', 'lv-grid',
-    'lv-diff', 'lv-stars', 'lv-close', 'r-h', 'r-stars', 'b-next', 'b-levels']) E[id] = $(id);
+    'lv-diff', 'lv-stars', 'lv-close', 'r-h', 'r-stars', 'b-next', 'b-levels', 't-gfx']) E[id] = $(id);
   E.stressIn = E.stress && E.stress.querySelector('.s-in b');
   E.promptKey = E.prompt && E.prompt.querySelector('.kc b');
   E.promptText = E.prompt && E.prompt.querySelector('.pt');
@@ -291,6 +293,7 @@ function moveJoy(x, y) {
 function syncTitleOpts() {
   for (const b of E['t-gender'].querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.g === settings.gender));
   for (const b of E.title.querySelectorAll('.tg')) b.setAttribute('aria-pressed', String(!!settings[b.dataset.set]));
+  if (E['t-gfx']) for (const b of E['t-gfx'].querySelectorAll('button')) b.setAttribute('aria-checked', String(b.dataset.q === settings.gfx));
 }
 
 /* ---------- 난이도 칩 (첫 화면 · 레벨 선택 창에 같은 모양) ----------
@@ -440,6 +443,10 @@ function bindUI() {
   on(E['b-levels'], () => call('levels'));
   for (const b of E['t-gender'].querySelectorAll('button')) on(b, () => {
     settings.gender = b.dataset.g; saveSettings(); syncTitleOpts(); call('setting', 'gender', settings.gender);
+  });
+  // 화질 (자동 · 빠르게 · 예쁘게): 누르면 바로 바뀌고 저장
+  if (E['t-gfx']) for (const b of E['t-gfx'].querySelectorAll('button')) on(b, () => {
+    settings.gfx = b.dataset.q; saveSettings(); syncTitleOpts(); call('setting', 'gfx', settings.gfx);
   });
   for (const b of E.title.querySelectorAll('.tg')) on(b, () => {
     const k = b.dataset.set;
